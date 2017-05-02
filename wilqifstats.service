@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect network usage statistics
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/wilqifstatsd
+KillMode=process
+Type=simple
+
+[Install]
+WantedBy=multi-user.target

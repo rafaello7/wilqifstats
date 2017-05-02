@@ -1,0 +1,14 @@
+Source: wilqifstats
+Section: net
+Priority: optional
+Maintainer: Rafal <fatwildcat@gmail.com>
+Build-Depends: debhelper (>= 9), autotools-dev
+Standards-Version: 3.9.8
+Homepage: https://github.com/rafaello7/wilqifstats
+
+Package: wilqifstats
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Collect and report network usage statistics
+ Server collecting network usage statistics
+ and CGI program to display the report
