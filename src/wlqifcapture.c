@@ -4,6 +4,7 @@
 #include "wlqifcapture.h"
 #include "wlqconfig.h"
 #include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <net/ethernet.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,30 +24,35 @@ struct PcapHandlerParam {
     const char *ifaceName;
     pcap_t *handle;
     pcap_handler pcapHandler;
-    void (*handler)(const char *ifaceName, struct in_addr src,
+    void (*ipv4handler)(const char *ifaceName, struct in_addr src,
         struct in_addr dst, unsigned pktlen, void *handlerParam);
+    void (*ipv6handler)(const char *ifaceName, const struct in6_addr *src,
+        const struct in6_addr *dst, unsigned pktlen, void *handlerParam);
     void *handlerParam;
     int selectableFd;
 };
 
-static void handle_raw_packet(u_char *param,
+static void invokeIpHandler(u_char *param,
         const struct pcap_pkthdr *pkthdr, const unsigned char *packet)
 {
     struct PcapHandlerParam *php = (struct PcapHandlerParam*)param;
-    struct ip *ipPkt = (struct ip*)packet;
+    int version = packet[0] >> 4;
 
-    php->handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-            ntohs(ipPkt->ip_len), php->handlerParam);
+    if( version == 4 ) {
+        struct ip *ipPkt = (struct ip*)packet;
+        php->ipv4handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
+                ntohs(ipPkt->ip_len), php->handlerParam);
+    }else{
+        struct ip6_hdr *ipPkt = (struct ip6_hdr*)packet;
+        php->ipv6handler(php->ifaceName, &ipPkt->ip6_src, &ipPkt->ip6_dst,
+                ntohs(ipPkt->ip6_plen) + 40, php->handlerParam);
+    }
 }
 
 static void handle_null_packet(u_char *param,
         const struct pcap_pkthdr* pkthdr, const unsigned char* packet)
 {
-    struct PcapHandlerParam *php = (struct PcapHandlerParam*)param;
-    struct ip *ipPkt = (struct ip*)(packet + 4);
-
-    php->handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-            ntohs(ipPkt->ip_len), php->handlerParam);
+    invokeIpHandler(param, pkthdr, packet + 4);
 }
 
 static void handle_ppp_packet(u_char *param,
@@ -58,25 +64,14 @@ static void handle_ppp_packet(u_char *param,
 	if(caplen >= 4 && packet[0] == PPP_ADDRESS) {
 		proto = htons(*(const uint16_t*)(packet+2));
         if(proto == PPP_IP || proto == ETHERTYPE_IP || proto == ETHERTYPE_IPV6)
-        {
-            struct PcapHandlerParam *php = (struct PcapHandlerParam*)param;
-            struct ip *ipPkt = (struct ip*)(packet + 4);
-
-            php->handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-                    ntohs(ipPkt->ip_len), php->handlerParam);
-        }
+            invokeIpHandler(param, pkthdr, packet + 4);
     }
 }
 
 static void handle_cooked_packet(u_char *param,
-        const struct pcap_pkthdr * thdr, const unsigned char * packet)
+        const struct pcap_pkthdr *pkthdr, const unsigned char * packet)
 {
-    struct PcapHandlerParam *php = (struct PcapHandlerParam*)param;
-    struct ip *ipPkt = (struct ip*)(packet + SLL_HDR_LEN);
-
-    php->handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-            ntohs(ipPkt->ip_len),
-            php->handlerParam);
+    invokeIpHandler(param, pkthdr, packet + SLL_HDR_LEN);
 }
 
 static void handle_eth_packet(u_char *param,
@@ -103,13 +98,8 @@ static void handle_eth_packet(u_char *param,
             //printf("broadcast\n");
         }else if( !memcmp("\x1\x0\x5e\x0\x0\xfb", eptr->ether_dhost, 6)) {
             //printf("mDNS multicast\n");
-        }else{
-            struct PcapHandlerParam *php = (struct PcapHandlerParam*)param;
-            struct ip *ipPkt = (struct ip*)(payload);
-
-            php->handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-                    ntohs(ipPkt->ip_len), php->handlerParam);
-        }
+        }else
+            invokeIpHandler(param, pkthdr, payload);
     }
 }
 
@@ -124,7 +114,7 @@ pcap_handler getPcapHandler(const char *ifaceName, pcap_t *handle)
         pcapHandler = handle_eth_packet;
     }else if(dlt == DLT_RAW) {
         printf("%s: RAW\n", ifaceName);
-        pcapHandler = handle_raw_packet;
+        pcapHandler = invokeIpHandler;
     }else if(dlt == DLT_NULL) {
         printf("%s: NULL\n", ifaceName);
         pcapHandler = handle_null_packet;
@@ -146,8 +136,10 @@ pcap_handler getPcapHandler(const char *ifaceName, pcap_t *handle)
 }
 
 void wlqifcap_loop(const char *const *interfaces, const char *filter,
-        void (*handler)(const char *ifaceName, struct in_addr src,
+        void (*ipv4handler)(const char *ifaceName, struct in_addr src,
             struct in_addr dst, unsigned pktlen, void *handlerParam),
+        void (*ipv6handler)(const char *ifaceName, const struct in6_addr *src,
+            const struct in6_addr *dst, unsigned pktlen, void *handlerParam),
         void *handlerParam)
 {
     pcap_if_t *allDevs, *curDev;
@@ -229,7 +221,8 @@ void wlqifcap_loop(const char *const *interfaces, const char *filter,
         curHandler->ifaceName = strdup(curDev->name);
         curHandler->handle = handle;
         curHandler->pcapHandler = pcapHandler;
-        curHandler->handler = handler;
+        curHandler->ipv4handler = ipv4handler;
+        curHandler->ipv6handler = ipv6handler;
         curHandler->handlerParam = handlerParam;
         curHandler->selectableFd = selectableFd;
         if( selectableFd >= nfds )

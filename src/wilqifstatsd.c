@@ -1,4 +1,3 @@
-#include <pcap.h>
 #include <stdio.h>
 #include <arpa/inet.h>
 #include <memory.h>
@@ -131,7 +130,7 @@ static void saveStats(WilqStats *wstats, int clearStats)
     }
 }
 
-static void packetHandler(const char *ifaceName,
+static void ipv4PacketHandler(const char *ifaceName,
         struct in_addr src, struct in_addr dst,
         unsigned pktlen, void *handlerParam)
 {
@@ -195,6 +194,16 @@ static void packetHandler(const char *ifaceName,
         saveIfaceStats(ifaceStats, curHour, 0);
 }
 
+void ipv6PacketHandler(const char *ifaceName, const struct in6_addr *src,
+    const struct in6_addr *dst, unsigned pktlen, void *handlerParam)
+{
+    char srcstr[INET6_ADDRSTRLEN], dststr[INET6_ADDRSTRLEN];
+
+    printf("ipv6 packet %s -> %s, %d bytes, ignored\n",
+            inet_ntop(AF_INET6, src, srcstr, sizeof(srcstr)),
+            inet_ntop(AF_INET6, dst, dststr, sizeof(dststr)), pktlen);
+}
+
 static WilqStats *gWstats;
 
 static void capture_finish(int sig)
@@ -231,6 +240,6 @@ int main(int argc, char *argv[])
     sa.sa_handler = capture_dump;
     sigaction(SIGHUP, &sa, NULL);
     wlqifcap_loop(wlqconf_getInterfaces(), wlqconf_getFilter(),
-            packetHandler, &stats);
+            ipv4PacketHandler, ipv6PacketHandler, &stats);
     return 0;
 }
