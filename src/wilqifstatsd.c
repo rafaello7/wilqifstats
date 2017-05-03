@@ -18,13 +18,13 @@ typedef struct {
     char *ifaceName;
     ip_statistics *stats;
     int statCount;
+    unsigned unsavedBytes;
 } IfaceStats;
 
 typedef struct {
     IfaceStats *ifaceStats;
     int ifaceCount;
     unsigned statHour;
-    unsigned unsavedBytes;
 } WilqStats;
 
 
@@ -40,7 +40,6 @@ static void loadStats(WilqStats *wstats)
     wstats->ifaceStats = NULL;
     wstats->ifaceCount = 0;
     wstats->statHour = curTm / 3600;
-    wstats->unsavedBytes = 0;
     if( (dp = opendir(WLQSTATSDIR)) == NULL ) {
         fprintf(stderr, "unable to open stats dir %s: %s\n",
                 WLQSTATSDIR, strerror(errno));
@@ -63,6 +62,7 @@ static void loadStats(WilqStats *wstats)
         ifaceStats->ifaceName = strdup(de->d_name);
         ifaceStats->stats = NULL;
         ifaceStats->statCount = 0;
+        ifaceStats->unsavedBytes = 0;
         while( 1 ) {
             ifaceStats->stats = realloc(ifaceStats->stats,
                     (ifaceStats->statCount + 16) * sizeof(ip_statistics));
@@ -82,40 +82,52 @@ static void loadStats(WilqStats *wstats)
     closedir(dp);
 }
 
-static void saveStats(WilqStats *wstats)
+static void saveIfaceStats(IfaceStats *ifaceStats, unsigned statHour,
+        int clearStats)
 {
     char fname[100];
     FILE *fp;
+
+    sprintf(fname, "%s/%s/%u", WLQSTATSDIR,
+            ifaceStats->ifaceName, statHour);
+    if( (fp = fopen(fname, "w")) == NULL ) {
+        if( errno == ENOENT ) {
+            char dname[100];
+            sprintf(dname, "%s/%s", WLQSTATSDIR, ifaceStats->ifaceName);
+            if( mkdir(dname, 0755) != 0 && errno != EEXIST ) {
+                fprintf(stderr, "unable to create directory %s: %s\n",
+                        dname, strerror(errno));
+                exit(1);
+            }
+            fp = fopen(fname, "w");
+        }
+        if( fp == NULL ) {
+            fprintf(stderr, "unable to open %s for writing: %s\n",
+                    fname, strerror(errno));
+            exit(1);
+        }
+    }
+    fwrite(ifaceStats->stats, sizeof(ip_statistics),
+            ifaceStats->statCount, fp);
+    fclose(fp);
+    if( clearStats ) {
+        free(ifaceStats->stats);
+        ifaceStats->stats = NULL;
+        ifaceStats->statCount = 0;
+    }
+    ifaceStats->unsavedBytes = 0;
+}
+
+static void saveStats(WilqStats *wstats, int clearStats)
+{
     int i;
 
     for(i = 0; i < wstats->ifaceCount; ++i) {
         IfaceStats *ifaceStats = wstats->ifaceStats + i;
-        if( ifaceStats->statCount == 0 )
+        if( ifaceStats->unsavedBytes == 0 )
             continue;
-        sprintf(fname, "%s/%s/%u", WLQSTATSDIR,
-                ifaceStats->ifaceName, wstats->statHour);
-        if( (fp = fopen(fname, "w")) == NULL ) {
-            if( errno == ENOENT ) {
-                char dname[100];
-                sprintf(dname, "%s/%s", WLQSTATSDIR, ifaceStats->ifaceName);
-                if( mkdir(dname, 0755) != 0 && errno != EEXIST ) {
-                    fprintf(stderr, "unable to create directory %s: %s\n",
-                            dname, strerror(errno));
-                    exit(1);
-                }
-                fp = fopen(fname, "w");
-            }
-            if( fp == NULL ) {
-                fprintf(stderr, "unable to open %s for writing: %s\n",
-                        fname, strerror(errno));
-                exit(1);
-            }
-        }
-        fwrite(ifaceStats->stats, sizeof(ip_statistics),
-                ifaceStats->statCount, fp);
-        fclose(fp);
+        saveIfaceStats(ifaceStats, wstats->statHour, clearStats);
     }
-    wstats->unsavedBytes = 0;
 }
 
 static void packetHandler(const char *ifaceName,
@@ -131,13 +143,7 @@ static void packetHandler(const char *ifaceName,
 
     unsigned curHour = curTm / 3600;
     if( curHour != wstats->statHour ) {
-        saveStats(wstats);
-        for(i = 0; i < wstats->ifaceCount; ++i) {
-            ifaceStats = wstats->ifaceStats + i;
-            free(ifaceStats->stats);
-            ifaceStats->stats = NULL;
-            ifaceStats->statCount = 0;
-        }
+        saveStats(wstats, 1);
         wstats->statHour = curHour;
     }
     if( ! memcmp(&src.s_addr, localnet, 2) ) {
@@ -183,23 +189,23 @@ static void packetHandler(const char *ifaceName,
         ifaceStats->stats[i].nbytes = 0;
     }
     ifaceStats->stats[i].nbytes += pktlen;
-    wstats->unsavedBytes += pktlen;
-    if( wstats->unsavedBytes >= 50 * 1024 * 1024 )
-        saveStats(wstats);
+    ifaceStats->unsavedBytes += pktlen;
+    if( ifaceStats->unsavedBytes >= 50 * 1024 * 1024 )
+        saveIfaceStats(ifaceStats, curHour, 0);
 }
 
 static WilqStats *gWstats;
 
 static void capture_finish(int sig)
 {
-    saveStats(gWstats);
+    saveStats(gWstats, 0);
     printf("exiting...\n");
     exit(0);
 }
 
 static void capture_dump(int sig)
 {
-    saveStats(gWstats);
+    saveStats(gWstats, 0);
 }
 
 int main(int argc, char *argv[])
