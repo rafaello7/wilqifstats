@@ -287,7 +287,6 @@ static void dumpIfaceStat(const IfaceStat *is)
     char addrbuf[40];
     int idx;
 
-    printf("<h2>%s</h2>\n", is->ifaceName);
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
         printf("<h3>%04d/%02d &emsp; %.3f MiB</h3>\n",
@@ -353,7 +352,7 @@ static void dumpIfaceStat(const IfaceStat *is)
             printf("</tbody></table></td></tr>\n");
         }
         printf("</tbody></table>\n");
-        printf("<p></p>\n");
+        printf("<br>\n");
         printf("<table><tbody>\n");
         for(int didx = 1; didx < 32; ++didx) {
             int mday = didx % 31;
@@ -416,7 +415,7 @@ static void dumpStats(const IfaceStat *is)
         "Content-Type: text/html; charset=utf-8\n\n"
         "<!DOCTYPE html>\n"
         "<html><head>\n"
-        "<title>Network usage statistics on %s</title>\n"
+        "<title>%s network usage</title>\n"
         "<script>\n"
         "function showDet(th) {\n"
         "  th.parentNode.nextElementSibling.style.display = 'table-row';\n"
@@ -449,6 +448,9 @@ static void dumpStats(const IfaceStat *is)
         "}\n"
         "</script>\n"
         "<style>\n"
+        "body {\n"
+        "  background-color: #F2EBDF;\n"
+        "}\n"
         "td {\n"
         "  border-color: #ded4f2;\n"
         "  border-width: 1px;\n"
@@ -467,11 +469,25 @@ static void dumpStats(const IfaceStat *is)
         "  padding: 0px 4px;\n"
         "  cursor: default;\n"
         "}\n"
+        "h1 {\n"
+        "  background-color: #3B4762;\n"
+        "  color: #E4D9C5;\n"
+        "  padding: 2px 1ex;\n"
+        "}\n"
+        "h2 {\n"
+        "  font-family: monospace;\n"
+        "  background-color: #3B4762;\n"
+        "  color: #E4D9C5;\n"
+        "  padding: 2px 1ex;\n"
+        "}\n"
         "</style>\n"
         "</head>\n"
-        "<body>\n", hostname);
+        "<body>\n"
+        "<h1>%s network usage</h1>\n", hostname, hostname);
     while( is->ifaceName ) {
+        printf("<h2>%s</h2>\n", is->ifaceName);
         dumpIfaceStat(is);
+        printf("<br>\n");
         ++is;
     }
     printf("<p></p></body></html>\n");
