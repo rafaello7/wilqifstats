@@ -305,7 +305,7 @@ static void dumpIfaceStat(const IfaceStat *is)
         printf("<h3>%s %04d&emsp; %.3f MiB</h3>\n",
                 monthName(monthbuf, sizeof(monthbuf), ms->month),
                 ms->year, ms->nbytes / 1048576.0);
-        printf("<table><thead><tr><th colspan='4'>host usage</th>"
+        printf("<div><table><thead><tr><th colspan='4'>by host</th>"
                 "</tr></thead><tbody>\n");
         for(int hostNum = 0; hostNum < ms->hostCount; ++hostNum) {
             fflush(stdout);
@@ -367,7 +367,7 @@ static void dumpIfaceStat(const IfaceStat *is)
             printf("</tbody></table></td></tr>\n");
         }
         printf("</tbody></table><br>\n");
-        printf("<table><thead><tr><th colspan='3'>daily usage</th>"
+        printf("<table><thead><tr><th colspan='3'>daily</th>"
                 "</tr></thead><tbody>\n");
         for(int didx = 1; didx < 32; ++didx) {
             int mday = didx % 31;
@@ -416,7 +416,7 @@ static void dumpIfaceStat(const IfaceStat *is)
             }
             printf("</tbody></table>\n");
         }
-        printf("</tbody></table>\n");
+        printf("</tbody></table></div>\n");
         ++ms;
     }
 }
@@ -488,6 +488,7 @@ static void dumpStats(const IfaceStat *is)
         "  background-color: #3B4762;\n"
         "  color: #E4D9C5;\n"
         "  padding: 2px 1ex;\n"
+        "  text-align: center;\n"
         "}\n"
         "h2 {\n"
         "  font-family: monospace;\n"
@@ -495,18 +496,25 @@ static void dumpStats(const IfaceStat *is)
         "  color: #E4D9C5;\n"
         "  padding: 2px 1ex;\n"
         "  margin-top: 4em;\n"
+        "  text-align: center;\n"
         "}\n"
         "h3 {\n"
         "  background-color: #60481A;\n"
         "  color: #F2EBDF;\n"
         "  padding: 2px 1ex;\n"
-        "  margin-top: 2em;\n"
+        "  margin-top: 1em;\n"
+        "  margin-bottom: 2px;\n"
+        "}\n"
+        "h3 + div {\n"
+        "  border: solid #60481A 2px;\n"
+        "  margin-bottom: 1em;\n"
         "}\n"
         "th {\n"
-        "  background-color: #937D51;\n"
-        "  color: #F2EBDF;\n"
-        "  padding: 2px 1ex;\n"
+        "  color: #60481A;\n"
+        "  background-color: #E4D9C5;\n"
+        "  padding: 2px;\n"
         "  text-align: left;\n"
+        "  font-weight: normal;\n"
         "}\n"
         "</style>\n"
         "</head>\n"
@@ -515,7 +523,6 @@ static void dumpStats(const IfaceStat *is)
     while( is->ifaceName ) {
         printf("<h2>interface: %s</h2>\n", is->ifaceName);
         dumpIfaceStat(is);
-        printf("<br>\n");
         ++is;
     }
     printf("</body></html>\n");
