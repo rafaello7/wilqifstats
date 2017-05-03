@@ -23,5 +23,5 @@ AC_FUNC_MALLOC
 AC_FUNC_REALLOC
 AC_CHECK_FUNCS([gethostbyaddr inet_ntoa memmove memset mkdir strdup strerror strtoul])
 
-AC_CONFIG_FILES([Makefile src/Makefile debian/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile conf.d/Makefile debian/Makefile])
 AC_OUTPUT

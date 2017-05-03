@@ -9,10 +9,9 @@
 #include <sys/stat.h>
 #include "wilqifstats.h"
 #include "wlqifcapture.h"
+#include "wlqconfig.h"
 #include <errno.h>
 #include <dirent.h>
-
-static const char WLQSTATSDIR[] = "/var/lib/wilqifstats";
 
 typedef struct {
     char *ifaceName;
@@ -36,19 +35,20 @@ static void loadStats(WilqStats *wstats)
     time_t curTm = time(NULL);
     struct dirent *de;
     IfaceStats *ifaceStats;
+    const char *statsDir = wlqconf_getStatsDir();
 
     wstats->ifaceStats = NULL;
     wstats->ifaceCount = 0;
     wstats->statHour = curTm / 3600;
-    if( (dp = opendir(WLQSTATSDIR)) == NULL ) {
+    if( (dp = opendir(statsDir)) == NULL ) {
         fprintf(stderr, "unable to open stats dir %s: %s\n",
-                WLQSTATSDIR, strerror(errno));
+                statsDir, strerror(errno));
         exit(1);
     }
     while( (de = readdir(dp)) != NULL ) {
         if( de->d_name[0] == '.' || de->d_type != DT_DIR )
             continue;
-        sprintf(fname, "%s/%s/%u", WLQSTATSDIR, de->d_name, wstats->statHour);
+        sprintf(fname, "%s/%s/%u", statsDir, de->d_name, wstats->statHour);
         if( (fp = fopen(fname, "r")) == NULL ) {
             if( errno == ENOENT )
                 continue;
@@ -87,13 +87,14 @@ static void saveIfaceStats(IfaceStats *ifaceStats, unsigned statHour,
 {
     char fname[100];
     FILE *fp;
+    const char *statsDir = wlqconf_getStatsDir();
 
-    sprintf(fname, "%s/%s/%u", WLQSTATSDIR,
+    sprintf(fname, "%s/%s/%u", statsDir,
             ifaceStats->ifaceName, statHour);
     if( (fp = fopen(fname, "w")) == NULL ) {
         if( errno == ENOENT ) {
             char dname[100];
-            sprintf(dname, "%s/%s", WLQSTATSDIR, ifaceStats->ifaceName);
+            sprintf(dname, "%s/%s", statsDir, ifaceStats->ifaceName);
             if( mkdir(dname, 0755) != 0 && errno != EEXIST ) {
                 fprintf(stderr, "unable to create directory %s: %s\n",
                         dname, strerror(errno));
@@ -210,12 +211,14 @@ static void capture_dump(int sig)
 
 int main(int argc, char *argv[])
 {
-    const char *dev = argc == 1 ? "eth0" : argv[1];
     WilqStats stats;
+    const char *statsDir;
 
-    if( mkdir(WLQSTATSDIR, 0755) == 0 ) {
-        if( chown(WLQSTATSDIR, 1000, 1000) != 0 )
-            fprintf(stderr, "chown(%s): %s\n", WLQSTATSDIR, strerror(errno));
+    wlqconf_read();
+    statsDir = wlqconf_getStatsDir();
+    if( mkdir(statsDir, 0755) == 0 ) {
+        if( chown(statsDir, 1000, 1000) != 0 )
+            fprintf(stderr, "chown(%s): %s\n", statsDir, strerror(errno));
     }
     loadStats(&stats);
     fflush(stdout);
@@ -227,7 +230,7 @@ int main(int argc, char *argv[])
     sigaction(SIGTERM, &sa, NULL);
     sa.sa_handler = capture_dump;
     sigaction(SIGHUP, &sa, NULL);
-    wlqifcap_loop(NULL, "not src net 192.168 or not dst net 192.168",
+    wlqifcap_loop(wlqconf_getInterfaces(), wlqconf_getFilter(),
             packetHandler, &stats);
     return 0;
 }

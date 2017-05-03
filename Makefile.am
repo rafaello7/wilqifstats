@@ -1,4 +1,4 @@
-SUBDIRS = src debian
+SUBDIRS = src debian conf.d
 
 systemddir = /lib/systemd/system
 dist_systemd_DATA = wilqifstats.service

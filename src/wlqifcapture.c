@@ -2,6 +2,7 @@
 #include <pcap/pcap.h>
 #include <pcap/sll.h>
 #include "wlqifcapture.h"
+#include "wlqconfig.h"
 #include <netinet/ip.h>
 #include <net/ethernet.h>
 #include <stdlib.h>
@@ -144,7 +145,7 @@ pcap_handler getPcapHandler(const char *ifaceName, pcap_t *handle)
     return pcapHandler;
 }
 
-void wlqifcap_loop(const char *interfaces, const char *filter,
+void wlqifcap_loop(const char *const *interfaces, const char *filter,
         void (*handler)(const char *ifaceName, struct in_addr src,
             struct in_addr dst, unsigned pktlen, void *handlerParam),
         void *handlerParam)
@@ -161,19 +162,15 @@ void wlqifcap_loop(const char *interfaces, const char *filter,
     }
     for(curDev = allDevs; curDev != NULL; curDev = curDev->next) {
         struct pcap_addr *addr = curDev->addresses;
-        int isInet = 0, selectableFd;
+        int ifno, isInet = 0, selectableFd;
         pcap_handler pcapHandler;
         pcap_t *handle;
 
         if( interfaces ) {
-            const char *p = strstr(interfaces, curDev->name);
-            int plen, devlen;
-
-            if( p == NULL || p != interfaces && p[-1] > ' ' )
-                continue;
-            plen = strlen(p);
-            devlen = strlen(curDev->name);
-            if( plen < devlen || p[devlen] > ' ' )
+            for(ifno = 0; interfaces[ifno]
+                    && strcmp(interfaces[ifno], curDev->name); ++ifno)
+                ;
+            if( interfaces[ifno] == NULL )
                 continue;
         }else if( curDev->flags & PCAP_IF_LOOPBACK )
             continue;
@@ -239,10 +236,7 @@ void wlqifcap_loop(const char *interfaces, const char *filter,
             nfds = selectableFd + 1;
     }
     pcap_freealldevs(allDevs);
-    if( setgid(1000) != 0 )
-        fprintf(stderr, "setgid: %s\n", strerror(errno));
-    if( setuid(1000) != 0 )
-        fprintf(stderr, "setuid: %s\n", strerror(errno));
+    wlqconf_switchToTargetUser();
     FD_ZERO(&fds);
     while( 1 ) {
         int i;

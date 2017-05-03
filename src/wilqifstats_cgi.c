@@ -3,6 +3,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include "wilqifstats.h"
+#include "wlqconfig.h"
 #include <dirent.h>
 #include <errno.h>
 #include <string.h>
@@ -10,7 +11,6 @@
 #include <unistd.h>
 #include <time.h>
 
-static const char WLQSTATSDIR[] = "/var/lib/wilqifstats";
 
 typedef struct {
     in_addr_t remote;
@@ -62,7 +62,7 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
     MonthlyStat *mstats = NULL;
     int rd, statCount = 0;
 
-    sprintf(dname, "%s/%s", WLQSTATSDIR, ifaceName);
+    sprintf(dname, "%s/%s", wlqconf_getStatsDir(), ifaceName);
     dp = opendir(dname);
     if( dp != NULL ) {
         while( (de = readdir(dp)) != NULL ) {
@@ -227,22 +227,48 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
 
 static IfaceStat *loadStats(void)
 {
-    DIR *dp;
-    const struct dirent *de;
     IfaceStat *res;
-    int ifaceCount = 0;
+    int i, ifaceCount = 0;
+    const char *const *interfaces;
 
+    interfaces = wlqconf_getInterfaces();
     res = malloc(sizeof(IfaceStat));
     memset(res, 0, sizeof(IfaceStat));
-    dp = opendir(WLQSTATSDIR);
-    if( dp != NULL ) {
-        while( (de = readdir(dp)) != NULL ) {
-            if( de->d_type == DT_DIR ) {
-                loadIfaceStats(de->d_name, res + ifaceCount);
-                if( res[ifaceCount].ifaceName != NULL ) {
-                    res = realloc(res,
-                            (++ifaceCount + 1) * sizeof(IfaceStat));
-                    memset(res + ifaceCount, 0, sizeof(IfaceStat));
+    if( interfaces != NULL ) {
+        for(i = 0; interfaces[i]; ++i) {
+            loadIfaceStats(interfaces[i], res + ifaceCount);
+            if( res[ifaceCount].ifaceName != NULL ) {
+                res = realloc(res,
+                        (++ifaceCount + 1) * sizeof(IfaceStat));
+                memset(res + ifaceCount, 0, sizeof(IfaceStat));
+            }
+        }
+    }else{
+        DIR *dp;
+        const struct dirent *de;
+
+        dp = opendir(wlqconf_getStatsDir());
+        if( dp != NULL ) {
+            while( (de = readdir(dp)) != NULL ) {
+                if( de->d_type == DT_DIR ) {
+                    loadIfaceStats(de->d_name, res + ifaceCount);
+                    if( res[ifaceCount].ifaceName != NULL ) {
+                        res = realloc(res,
+                                (++ifaceCount + 1) * sizeof(IfaceStat));
+                        memset(res + ifaceCount, 0, sizeof(IfaceStat));
+                    }
+                }
+            }
+            for(i = 0; i < ifaceCount; ++i) {
+                int imin = i;
+                for(int j = i + 1; j < ifaceCount; ++j) {
+                    if( strcmp(res[j].ifaceName, res[i].ifaceName) < 0 )
+                        imin = j;
+                }
+                if( imin != i ) {
+                    IfaceStat is = res[i];
+                    res[i] = res[imin];
+                    res[imin] = is;
                 }
             }
         }
@@ -424,6 +450,7 @@ static void dumpIfaceStat(const IfaceStat *is)
 static void dumpStats(const IfaceStat *is)
 {
     char hostname[HOST_NAME_MAX+1];
+    const char *const *interfaces = wlqconf_getInterfaces();
 
     gethostname(hostname, sizeof(hostname));
     printf("HTTP/1.1 Ok\n"
@@ -521,7 +548,8 @@ static void dumpStats(const IfaceStat *is)
         "<body>\n"
         "<h1>%s network usage</h1>\n", hostname, hostname);
     while( is->ifaceName ) {
-        printf("<h2>interface: %s</h2>\n", is->ifaceName);
+        if( interfaces == NULL || interfaces[1] )
+            printf("<h2>interface: %s</h2>\n", is->ifaceName);
         dumpIfaceStat(is);
         ++is;
     }
@@ -546,6 +574,8 @@ static void dumpLookup(const char *addr)
 int main(int argc, char *argv[])
 {
     const char *queryStr = getenv("QUERY_STRING");
+
+    wlqconf_read();
     if( queryStr != NULL && !strncmp(queryStr, "lookup=", 7) ) {
         dumpLookup(queryStr+7);
     }else{
