@@ -3,6 +3,7 @@
 
 void wlqconf_read(void);
 
+void wlqconf_createStatsDir(void);
 void wlqconf_switchToTargetUser(void);
 const char *const *wlqconf_getInterfaces(void);
 const char *wlqconf_getStatsDir(void);

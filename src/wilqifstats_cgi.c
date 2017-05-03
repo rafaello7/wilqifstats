@@ -529,7 +529,7 @@ static void dumpStats(const IfaceStat *is)
         "  background-color: #60481A;\n"
         "  color: #F2EBDF;\n"
         "  padding: 2px 1ex;\n"
-        "  margin-top: 1em;\n"
+        "  margin-top: 3ex;\n"
         "  margin-bottom: 2px;\n"
         "}\n"
         "h3 + div {\n"

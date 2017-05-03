@@ -224,6 +224,7 @@ int main(int argc, char *argv[])
     const char *statsDir;
 
     wlqconf_read();
+    wlqconf_createStatsDir();
     statsDir = wlqconf_getStatsDir();
     if( mkdir(statsDir, 0755) == 0 ) {
         if( chown(statsDir, 1000, 1000) != 0 )

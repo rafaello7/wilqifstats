@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pwd.h>
+#include <sys/stat.h>
 
 static const char WLQCONFDIR[] = "/etc/wilqifstats.d";
 
@@ -130,6 +131,31 @@ void wlqconf_read(void)
             sprintf(fname, "%s/%s", WLQCONFDIR, de->d_name);
             parseFile(fname);
         }
+    }
+}
+
+void wlqconf_createStatsDir(void)
+{
+    struct passwd *pwd;
+
+    if( mkdir(gStatsDir, 0755) == 0 ) {
+        if( gSwitchUser[0] && geteuid() == 0 ) {
+            if( (pwd = getpwnam(gSwitchUser)) != NULL ) {
+                if( chown(gStatsDir, pwd->pw_uid, pwd->pw_gid) != 0 ) {
+                    fprintf(stderr, "chown(%s): %s\n", gStatsDir,
+                            strerror(errno));
+                    exit(1);
+                }
+            }else{
+                fprintf(stderr, "No such user \"%s\"; please specify a valid "
+                        "switch user in configuration file\n", gSwitchUser);
+                exit(1);
+            }
+        }
+    }else if( errno != EEXIST ) {
+        fprintf(stderr, "Unable to create directory %s: %s\n",
+                gStatsDir, strerror(errno));
+        exit(1);
     }
 }
 
