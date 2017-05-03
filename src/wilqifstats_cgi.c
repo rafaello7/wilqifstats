@@ -282,16 +282,31 @@ static const char *addrToStr(in_addr_t addr)
     return inet_ntoa(a);
 }
 
+static char *monthName(char *buf, int buflen, int month)
+{
+    struct tm tmbuf;
+    tmbuf.tm_sec = 0;
+    tmbuf.tm_min = 0;
+    tmbuf.tm_hour = 0;
+    tmbuf.tm_mday = 1;
+    tmbuf.tm_mon = month - 1;
+    tmbuf.tm_year = 117;
+    strftime(buf, buflen, "%B", &tmbuf);
+    return buf;
+}
+
 static void dumpIfaceStat(const IfaceStat *is)
 {
-    char addrbuf[40];
+    char addrbuf[40], monthbuf[20];
     int idx;
 
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
-        printf("<h3>%04d/%02d &emsp; %.3f MiB</h3>\n",
-                ms->year, ms->month, ms->nbytes / 1048576.0);
-        printf("<table><tbody>\n");
+        printf("<h3>%s %04d&emsp; %.3f MiB</h3>\n",
+                monthName(monthbuf, sizeof(monthbuf), ms->month),
+                ms->year, ms->nbytes / 1048576.0);
+        printf("<table><thead><tr><th colspan='4'>host usage</th>"
+                "</tr></thead><tbody>\n");
         for(int hostNum = 0; hostNum < ms->hostCount; ++hostNum) {
             fflush(stdout);
             printf("<tr><td class='plusminus' onclick='showDet(this)'>+</td>"
@@ -351,9 +366,9 @@ static void dumpIfaceStat(const IfaceStat *is)
             }
             printf("</tbody></table></td></tr>\n");
         }
-        printf("</tbody></table>\n");
-        printf("<br>\n");
-        printf("<table><tbody>\n");
+        printf("</tbody></table><br>\n");
+        printf("<table><thead><tr><th colspan='3'>daily usage</th>"
+                "</tr></thead><tbody>\n");
         for(int didx = 1; didx < 32; ++didx) {
             int mday = didx % 31;
             if( ms->dailyStat[mday].nbytes == 0 )
@@ -479,18 +494,31 @@ static void dumpStats(const IfaceStat *is)
         "  background-color: #3B4762;\n"
         "  color: #E4D9C5;\n"
         "  padding: 2px 1ex;\n"
+        "  margin-top: 4em;\n"
+        "}\n"
+        "h3 {\n"
+        "  background-color: #60481A;\n"
+        "  color: #F2EBDF;\n"
+        "  padding: 2px 1ex;\n"
+        "  margin-top: 2em;\n"
+        "}\n"
+        "th {\n"
+        "  background-color: #937D51;\n"
+        "  color: #F2EBDF;\n"
+        "  padding: 2px 1ex;\n"
+        "  text-align: left;\n"
         "}\n"
         "</style>\n"
         "</head>\n"
         "<body>\n"
         "<h1>%s network usage</h1>\n", hostname, hostname);
     while( is->ifaceName ) {
-        printf("<h2>%s</h2>\n", is->ifaceName);
+        printf("<h2>interface: %s</h2>\n", is->ifaceName);
         dumpIfaceStat(is);
         printf("<br>\n");
         ++is;
     }
-    printf("<p></p></body></html>\n");
+    printf("</body></html>\n");
 }
 
 static void dumpLookup(const char *addr)
