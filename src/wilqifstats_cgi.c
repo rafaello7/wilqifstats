@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <time.h>
 
 static const char WLQSTATSDIR[] = "/var/lib/wilqifstats";
@@ -44,121 +45,129 @@ typedef struct {
     int hostCount;
 } MonthlyStat;
 
-static MonthlyStat *loadStats(void)
+typedef struct {
+    char *ifaceName;
+    MonthlyStat *stats;
+    int statCount;
+} IfaceStat;
+
+static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
 {
     DIR *dp;
     const struct dirent *de;
-    char fname[40], *endp;
+    char dname[100], fname[120], *endp;
     unsigned hour;
     FILE *fp;
     ip_statistics stats;
-    MonthlyStat *res;
+    MonthlyStat *mstats = NULL;
     int rd, statCount = 0;
 
-    res = malloc(sizeof(MonthlyStat));
-    memset(res, 0, sizeof(MonthlyStat));
-    dp = opendir(WLQSTATSDIR);
-    if( dp == NULL )
-        return res;
-    while( (de = readdir(dp)) != NULL ) {
-        if( de->d_type != DT_REG )
-            continue;
-        hour = strtoul(de->d_name, &endp, 10);
-        if( hour == 0 || *endp ) {
-            printf("%s/%s: not a stats file, ignored\n",
-                    WLQSTATSDIR, de->d_name);
-            continue;
-        }
-        sprintf(fname, "%s/%s", WLQSTATSDIR, de->d_name);
-        if( (fp = fopen(fname, "r")) == NULL ) {
-            fprintf(stderr, "unable to open %s for reading: %s\n",
-                    fname, strerror(errno));
-            continue;
-        }
-        time_t tim = hour * 3600;
-        struct tm *t = localtime(&tim);
-        int year = t->tm_year + 1900;
-        int month = t->tm_mon + 1;
-        int mday = t->tm_mday;
-        int dhour = t->tm_hour;
-        if( mday == 1 ) {
-            // 1st day is included in previous month
-            if( month == 0 ) {
-                --year;
-                month = 11;
-            }else{
-                --month;
+    sprintf(dname, "%s/%s", WLQSTATSDIR, ifaceName);
+    dp = opendir(dname);
+    if( dp != NULL ) {
+        while( (de = readdir(dp)) != NULL ) {
+            if( de->d_type != DT_REG )
+                continue;
+            hour = strtoul(de->d_name, &endp, 10);
+            if( hour == 0 || *endp ) {
+                printf("%s/%s: not a stats file, ignored\n",
+                        dname, de->d_name);
+                continue;
             }
-        }
-        int msIdx = 0;
-        while( res[msIdx].year > year
-                || res[msIdx].year == year && res[msIdx].month > month )
-            ++msIdx;
-        if( res[msIdx].year < year
-                || res[msIdx].year == year && res[msIdx].month < month )
-        {
-            res = realloc(res, (++statCount + 1) * sizeof(MonthlyStat));
-            memmove(res + msIdx + 1, res + msIdx,
-                    (statCount-msIdx) * sizeof(MonthlyStat));
-            memset(res + msIdx, 0, sizeof(MonthlyStat));
-            res[msIdx].year = year;
-            res[msIdx].month = month;
-        }
-        MonthlyStat *ms = res + msIdx;
-        while( (rd = fread(&stats, sizeof(ip_statistics), 1, fp)) == 1 ) {
-            ms->nbytes += stats.nbytes;
-            ms->dailyStat[mday-1].nbytes += stats.nbytes;
-            int i = 0;
-            while( i < ms->hostCount && ms->hosts[i].host != stats.local )
-                ++i;
-            if( i == ms->hostCount ) {
-                ms->hosts = realloc(ms->hosts, ++ms->hostCount *
-                        sizeof(MonthlyStatByHost));
-                memset(ms->hosts + i, 0, sizeof(MonthlyStatByHost));
-                ms->hosts[i].host = stats.local;
+            sprintf(fname, "%s/%s", dname, de->d_name);
+            if( (fp = fopen(fname, "r")) == NULL ) {
+                fprintf(stderr, "unable to open %s for reading: %s\n",
+                        fname, strerror(errno));
+                continue;
             }
-            MonthlyStatByHost *msbh = ms->hosts + i;
-            msbh->nbytes += stats.nbytes;
-            i = 0;
-            while( i < ms->dailyStat[mday-1].hostCount
-                    && ms->dailyStat[mday-1].hosts[i].host != stats.local )
-                ++i;
-            if( i == ms->dailyStat[mday-1].hostCount ) {
-                ms->dailyStat[mday-1].hosts =
-                    realloc(ms->dailyStat[mday-1].hosts,
-                        ++ms->dailyStat[mday-1].hostCount
-                        * sizeof(DailyStatByHost));
-                memset(ms->dailyStat[mday-1].hosts + i, 0,
-                        sizeof(DailyStatByHost));
-                ms->dailyStat[mday-1].hosts[i].host = stats.local;
+            time_t tim = hour * 3600;
+            struct tm *t = localtime(&tim);
+            int year = t->tm_year + 1900;
+            int month = t->tm_mon + 1;
+            int mday = t->tm_mday;
+            int dhour = t->tm_hour;
+            if( mday == 1 ) {
+                // 1st day is included in previous month
+                if( month == 0 ) {
+                    --year;
+                    month = 11;
+                }else{
+                    --month;
+                }
             }
-            DailyStatByHost *dsbh = ms->dailyStat[mday-1].hosts + i;
-            dsbh->nbytes += stats.nbytes;
-            dsbh->hourlyStat[dhour].nbytes += stats.nbytes;
-            HostStat *hs = dsbh->hourlyStat[dhour].hosts;
-            int hostCount = dsbh->hourlyStat[dhour].hostCount;
-            int hsIdx = 0;
-            while( hsIdx < hostCount && hs[hsIdx].remote != stats.remote )
-                ++hsIdx;
-            if( hsIdx == hostCount ) {
-                hs = realloc(hs, ++hostCount * sizeof(HostStat));
-                memset(hs + hsIdx, 0, sizeof(HostStat));
-                hs[hsIdx].remote = stats.remote;
-                dsbh->hourlyStat[dhour].hosts = hs;
-                dsbh->hourlyStat[dhour].hostCount = hostCount;
+            int msIdx = 0;
+            while( msIdx < statCount && (mstats[msIdx].year > year
+                    || mstats[msIdx].year == year
+                        && mstats[msIdx].month > month) )
+                ++msIdx;
+            if( msIdx == statCount || mstats[msIdx].year < year
+                    || mstats[msIdx].year == year
+                        && mstats[msIdx].month < month )
+            {
+                mstats = realloc(mstats, (statCount+1) * sizeof(MonthlyStat));
+                memmove(mstats + msIdx + 1, mstats + msIdx,
+                        (statCount-msIdx) * sizeof(MonthlyStat));
+                memset(mstats + msIdx, 0, sizeof(MonthlyStat));
+                mstats[msIdx].year = year;
+                mstats[msIdx].month = month;
+                ++statCount;
             }
-            hs[hsIdx].nbytes += stats.nbytes;
+            MonthlyStat *ms = mstats + msIdx;
+            while( (rd = fread(&stats, sizeof(ip_statistics), 1, fp)) == 1 ) {
+                ms->nbytes += stats.nbytes;
+                ms->dailyStat[mday-1].nbytes += stats.nbytes;
+                int i = 0;
+                while( i < ms->hostCount && ms->hosts[i].host != stats.local )
+                    ++i;
+                if( i == ms->hostCount ) {
+                    ms->hosts = realloc(ms->hosts, ++ms->hostCount *
+                            sizeof(MonthlyStatByHost));
+                    memset(ms->hosts + i, 0, sizeof(MonthlyStatByHost));
+                    ms->hosts[i].host = stats.local;
+                }
+                MonthlyStatByHost *msbh = ms->hosts + i;
+                msbh->nbytes += stats.nbytes;
+                i = 0;
+                while( i < ms->dailyStat[mday-1].hostCount
+                        && ms->dailyStat[mday-1].hosts[i].host != stats.local )
+                    ++i;
+                if( i == ms->dailyStat[mday-1].hostCount ) {
+                    ms->dailyStat[mday-1].hosts =
+                        realloc(ms->dailyStat[mday-1].hosts,
+                            ++ms->dailyStat[mday-1].hostCount
+                            * sizeof(DailyStatByHost));
+                    memset(ms->dailyStat[mday-1].hosts + i, 0,
+                            sizeof(DailyStatByHost));
+                    ms->dailyStat[mday-1].hosts[i].host = stats.local;
+                }
+                DailyStatByHost *dsbh = ms->dailyStat[mday-1].hosts + i;
+                dsbh->nbytes += stats.nbytes;
+                dsbh->hourlyStat[dhour].nbytes += stats.nbytes;
+                HostStat *hs = dsbh->hourlyStat[dhour].hosts;
+                int hostCount = dsbh->hourlyStat[dhour].hostCount;
+                int hsIdx = 0;
+                while( hsIdx < hostCount && hs[hsIdx].remote != stats.remote )
+                    ++hsIdx;
+                if( hsIdx == hostCount ) {
+                    hs = realloc(hs, ++hostCount * sizeof(HostStat));
+                    memset(hs + hsIdx, 0, sizeof(HostStat));
+                    hs[hsIdx].remote = stats.remote;
+                    dsbh->hourlyStat[dhour].hosts = hs;
+                    dsbh->hourlyStat[dhour].hostCount = hostCount;
+                }
+                hs[hsIdx].nbytes += stats.nbytes;
+            }
+            if( rd < 0 ) {
+                fprintf(stderr, "%s read error: %s\n",
+                        fname, strerror(errno));
+            }
+            fclose(fp);
         }
-        if( rd < 0 ) {
-            fprintf(stderr, "%s read error: %s\n",
-                    fname, strerror(errno));
-        }
-        fclose(fp);
+        closedir(dp);
     }
-    closedir(dp);
     /* sort by bytes used */
     for(int i = 0; i < statCount; ++i) {
-        MonthlyStat *ms = res + i;
+        MonthlyStat *ms = mstats + i;
         for(int j = 0; j < ms->hostCount; ++j) {
             int jmax = j;
             for(int k = j + 1; k < ms->hostCount; ++k) {
@@ -211,6 +220,33 @@ static MonthlyStat *loadStats(void)
             }
         }
     }
+    ifaceStat->ifaceName = statCount == 0 ? NULL : strdup(ifaceName);
+    ifaceStat->stats = mstats;
+    ifaceStat->statCount = statCount;
+}
+
+static IfaceStat *loadStats(void)
+{
+    DIR *dp;
+    const struct dirent *de;
+    IfaceStat *res;
+    int ifaceCount = 0;
+
+    res = malloc(sizeof(IfaceStat));
+    memset(res, 0, sizeof(IfaceStat));
+    dp = opendir(WLQSTATSDIR);
+    if( dp != NULL ) {
+        while( (de = readdir(dp)) != NULL ) {
+            if( de->d_type == DT_DIR ) {
+                loadIfaceStats(de->d_name, res + ifaceCount);
+                if( res[ifaceCount].ifaceName != NULL ) {
+                    res = realloc(res,
+                            (++ifaceCount + 1) * sizeof(IfaceStat));
+                    memset(res + ifaceCount, 0, sizeof(IfaceStat));
+                }
+            }
+        }
+    }
     return res;
 }
 
@@ -246,69 +282,14 @@ static const char *addrToStr(in_addr_t addr)
     return inet_ntoa(a);
 }
 
-static void dumpStats(MonthlyStat *ms)
+static void dumpIfaceStat(const IfaceStat *is)
 {
     char addrbuf[40];
+    int idx;
 
-    printf("HTTP/1.1 Ok\n"
-        "Content-Type: text/html; charset=utf-8\n\n"
-        "<!DOCTYPE html>\n"
-        "<html><head>\n"
-        "<title>Network usage statistics</title>\n"
-        "<script>\n"
-        "function showDet(th) {\n"
-        "  th.parentNode.nextElementSibling.style.display = 'table-row';\n"
-        "  th.innerHTML = '&minus;';\n"
-        "  th.onclick = function() { hideDet(th); };\n"
-        "}\n"
-        "function showDetLook(th) {\n"
-        "  var n = th.parentNode.nextElementSibling;\n"
-        "  n.style.display = 'table-row';\n"
-        "  th.innerHTML = '&minus;';\n"
-        "  th.onclick = function() { hideDet(th); };\n"
-        "  var tr = n.firstElementChild.nextElementSibling.firstElementChild"
-                ".firstElementChild.firstElementChild;\n"
-        "  while( tr !== null ) {\n"
-        "    var td = tr.firstElementChild.nextElementSibling;\n"
-        "    var xhr = new XMLHttpRequest();\n"
-        "    xhr.loadTarget = td.nextElementSibling;\n"
-        "    xhr.onload = function() {\n"
-        "      this.loadTarget.textContent = this.responseText;\n"
-        "    }\n"
-        "    xhr.open('GET', '?lookup=' + td.textContent);\n"
-        "    xhr.send();\n"
-        "    tr = tr.nextElementSibling;\n"
-        " }\n"
-        "}\n"
-        "function hideDet(th) {\n"
-        "  th.parentNode.nextElementSibling.style.display = 'none';\n"
-        "  th.textContent = '+';\n"
-        "  th.onclick = function() { showDet(th); };\n"
-        "}\n"
-        "</script>\n"
-        "<style>\n"
-        "td {\n"
-        "  border-color: #ded4f2;\n"
-        "  border-width: 1px;\n"
-        "  border-bottom-style: solid;\n"
-        "  padding: 0px 2em 0px 3px;\n"
-        "}\n"
-        "td:first-child {\n"
-        "  padding: 0px;\n"
-        "  cursor: default;\n"
-        "}\n"
-        "td.plusminus {\n"
-        "  font-family: monospace;\n"
-        "  font-weight: bold;\n"
-        "  background-color: #937D51;\n"
-        "  color: white;\n"
-        "  padding: 0px 4px;\n"
-        "  cursor: default;\n"
-        "}\n"
-        "</style>\n"
-        "</head>\n"
-        "<body>\n");
-    while( ms->year ) {
+    for(idx = 0; idx < is->statCount; ++idx) {
+        MonthlyStat *ms = is->stats + idx;
+        printf("<h2>%s</h2>\n", is->ifaceName);
         printf("<h3>%04d/%02d &emsp; %.3f MiB</h3>\n",
                 ms->year, ms->month, ms->nbytes / 1048576.0);
         printf("<table><tbody>\n");
@@ -424,6 +405,75 @@ static void dumpStats(MonthlyStat *ms)
         printf("</tbody></table>\n");
         ++ms;
     }
+}
+
+static void dumpStats(const IfaceStat *is)
+{
+    char hostname[HOST_NAME_MAX+1];
+
+    gethostname(hostname, sizeof(hostname));
+    printf("HTTP/1.1 Ok\n"
+        "Content-Type: text/html; charset=utf-8\n\n"
+        "<!DOCTYPE html>\n"
+        "<html><head>\n"
+        "<title>Network usage statistics on %s</title>\n"
+        "<script>\n"
+        "function showDet(th) {\n"
+        "  th.parentNode.nextElementSibling.style.display = 'table-row';\n"
+        "  th.innerHTML = '&minus;';\n"
+        "  th.onclick = function() { hideDet(th); };\n"
+        "}\n"
+        "function showDetLook(th) {\n"
+        "  var n = th.parentNode.nextElementSibling;\n"
+        "  n.style.display = 'table-row';\n"
+        "  th.innerHTML = '&minus;';\n"
+        "  th.onclick = function() { hideDet(th); };\n"
+        "  var tr = n.firstElementChild.nextElementSibling.firstElementChild"
+                ".firstElementChild.firstElementChild;\n"
+        "  while( tr !== null ) {\n"
+        "    var td = tr.firstElementChild.nextElementSibling;\n"
+        "    var xhr = new XMLHttpRequest();\n"
+        "    xhr.loadTarget = td.nextElementSibling;\n"
+        "    xhr.onload = function() {\n"
+        "      this.loadTarget.textContent = this.responseText;\n"
+        "    }\n"
+        "    xhr.open('GET', '?lookup=' + td.textContent);\n"
+        "    xhr.send();\n"
+        "    tr = tr.nextElementSibling;\n"
+        " }\n"
+        "}\n"
+        "function hideDet(th) {\n"
+        "  th.parentNode.nextElementSibling.style.display = 'none';\n"
+        "  th.textContent = '+';\n"
+        "  th.onclick = function() { showDet(th); };\n"
+        "}\n"
+        "</script>\n"
+        "<style>\n"
+        "td {\n"
+        "  border-color: #ded4f2;\n"
+        "  border-width: 1px;\n"
+        "  border-bottom-style: solid;\n"
+        "  padding: 0px 2em 0px 3px;\n"
+        "}\n"
+        "td:first-child {\n"
+        "  padding: 0px;\n"
+        "  cursor: default;\n"
+        "}\n"
+        "td.plusminus {\n"
+        "  font-family: monospace;\n"
+        "  font-weight: bold;\n"
+        "  background-color: #937D51;\n"
+        "  color: white;\n"
+        "  padding: 0px 4px;\n"
+        "  cursor: default;\n"
+        "}\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n", hostname);
+    while( is->ifaceName ) {
+        dumpIfaceStat(is);
+        ++is;
+    }
     printf("<p></p></body></html>\n");
 }
 
@@ -448,8 +498,8 @@ int main(int argc, char *argv[])
     if( queryStr != NULL && !strncmp(queryStr, "lookup=", 7) ) {
         dumpLookup(queryStr+7);
     }else{
-        MonthlyStat *ms = loadStats();
-        dumpStats(ms);
+        IfaceStat *is = loadStats();
+        dumpStats(is);
     }
     return 0;
 }
