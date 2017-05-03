@@ -1,5 +1,5 @@
 [Unit]
-Description=Collect network usage statistics
+Description=network usage statistics monitor
 After=network.target
 
 [Service]

@@ -287,9 +287,9 @@ static void dumpIfaceStat(const IfaceStat *is)
     char addrbuf[40];
     int idx;
 
+    printf("<h2>%s</h2>\n", is->ifaceName);
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
-        printf("<h2>%s</h2>\n", is->ifaceName);
         printf("<h3>%04d/%02d &emsp; %.3f MiB</h3>\n",
                 ms->year, ms->month, ms->nbytes / 1048576.0);
         printf("<table><tbody>\n");
