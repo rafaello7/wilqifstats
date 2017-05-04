@@ -6,6 +6,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <net/ethernet.h>
+#include <arpa/inet.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -20,17 +21,95 @@ struct vlan_8021q_header {
 	u_int16_t	ether_type;
 };
 
+struct LocalNet {
+    int version;    /* 4 or 6 */
+    union {
+        struct in_addr net4;
+        struct in6_addr net6;
+    };
+    int masklen;
+};
+
 struct PcapHandlerParam {
     const char *ifaceName;
     pcap_t *handle;
     pcap_handler pcapHandler;
     void (*ipv4handler)(const char *ifaceName, struct in_addr src,
-        struct in_addr dst, unsigned pktlen, void *handlerParam);
+        struct in_addr dst, unsigned pktlen, PacketDirection,
+        void *handlerParam);
     void (*ipv6handler)(const char *ifaceName, const struct in6_addr *src,
-        const struct in6_addr *dst, unsigned pktlen, void *handlerParam);
+        const struct in6_addr *dst, unsigned pktlen, PacketDirection,
+        void *handlerParam);
     void *handlerParam;
     int selectableFd;
+    struct LocalNet *localNets;
 };
+
+static void parseLocalNet(struct LocalNet *dst, const char *addr,
+        int len)
+{
+    char *buf, *net;
+    int isNet6;
+
+    buf = malloc(len+1);
+    memcpy(buf, addr, len);
+    buf[len] = '\0';
+    net = strchr(buf, '/');
+    if( net != NULL )
+        *net++ = '\0';
+    isNet6 = strchr(buf, ':') != NULL;
+    dst->version = isNet6 ? 6 : 4;
+    if( inet_pton(isNet6 ? AF_INET6 : AF_INET, buf, &dst->net6) != 1 ) {
+        fprintf(stderr, "invalid localnet address %s\n", buf);
+        exit(1);
+    }
+    if( net != NULL ) {
+        dst->masklen = atoi(net);
+    }else
+        dst->masklen = isNet6 ? 128 : 32;
+    free(buf);
+}
+
+static int isLocalNet4(const struct PcapHandlerParam *php, struct in_addr addr)
+{
+    int i;
+    in_addr_t mask;
+
+    for(i = 0; i < php->localNets[i].version; ++i) {
+        if( php->localNets[i].version != 4 )
+            continue;
+        mask = ~((1 << php->localNets[i].masklen) - 1);
+        if( (php->localNets[i].net4.s_addr & mask) == (addr.s_addr & mask) )
+            return 1;
+    }
+    return 0;
+}
+
+static int isLocalNet6(const struct PcapHandlerParam *php,
+        const struct in6_addr *addr)
+{
+    int i, j, masklen, isEqual;
+
+    for(i = 0; i < php->localNets[i].version; ++i) {
+        if( php->localNets[i].version != 6 )
+            continue;
+        masklen = php->localNets[i].masklen;
+        isEqual = 1;
+        for(j = 0; isEqual && masklen >= 32; masklen -= 32) {
+            if( php->localNets[i].net6.s6_addr32[j] != addr->s6_addr32[j] )
+                isEqual = 0;
+        }
+        if( isEqual && masklen ) {
+            uint32_t mask = ~((1 << masklen) - 1);
+            if( (php->localNets[i].net6.s6_addr[j] & mask)
+                    != (addr->s6_addr[j] & mask) )
+                isEqual = 0;
+        }
+        if( isEqual )
+            return 1;
+    }
+    return 0;
+}
 
 static void invokeIpHandler(u_char *param,
         const struct pcap_pkthdr *pkthdr, const unsigned char *packet)
@@ -40,12 +119,59 @@ static void invokeIpHandler(u_char *param,
 
     if( version == 4 ) {
         struct ip *ipPkt = (struct ip*)packet;
+        PacketDirection pd;
+
+        if( isLocalNet4(php, ipPkt->ip_src) ) {
+            if( isLocalNet4(php, ipPkt->ip_dst) ) {
+                printf("local packet: %s", inet_ntoa(ipPkt->ip_src));
+                printf(" -> %s\n", inet_ntoa(ipPkt->ip_dst));
+                fflush(stdout);
+                return;
+            }else{
+                pd = PD_LOCAL_TO_REMOTE;
+            }
+        }else{
+            if( isLocalNet4(php, ipPkt->ip_dst) ) {
+                pd = PD_REMOTE_TO_LOCAL;
+            }else{
+                printf("martian: %s", inet_ntoa(ipPkt->ip_src));
+                printf(" -> %s\n", inet_ntoa(ipPkt->ip_dst));
+                fflush(stdout);
+                return;
+            }
+        }
         php->ipv4handler(php->ifaceName, ipPkt->ip_src, ipPkt->ip_dst,
-                ntohs(ipPkt->ip_len), php->handlerParam);
+                ntohs(ipPkt->ip_len), pd, php->handlerParam);
     }else{
         struct ip6_hdr *ipPkt = (struct ip6_hdr*)packet;
+        PacketDirection pd;
+        char addrbuf[INET6_ADDRSTRLEN];
+
+        if( isLocalNet6(php, &ipPkt->ip6_src) ) {
+            if( isLocalNet6(php, &ipPkt->ip6_dst) ) {
+                printf("local packet: %s", inet_ntop(AF_INET6, &ipPkt->ip6_src,
+                            addrbuf, sizeof(addrbuf)));
+                printf(" -> %s\n", inet_ntop(AF_INET6, &ipPkt->ip6_dst,
+                            addrbuf, sizeof(addrbuf)));
+                fflush(stdout);
+                return;
+            }else{
+                pd = PD_LOCAL_TO_REMOTE;
+            }
+        }else{
+            if( isLocalNet6(php, &ipPkt->ip6_dst) ) {
+                pd = PD_REMOTE_TO_LOCAL;
+            }else{
+                printf("martian: %s", inet_ntop(AF_INET6, &ipPkt->ip6_src,
+                            addrbuf, sizeof(addrbuf)));
+                printf(" -> %s\n", inet_ntop(AF_INET6, &ipPkt->ip6_dst,
+                            addrbuf, sizeof(addrbuf)));
+                fflush(stdout);
+                return;
+            }
+        }
         php->ipv6handler(php->ifaceName, &ipPkt->ip6_src, &ipPkt->ip6_dst,
-                ntohs(ipPkt->ip6_plen) + 40, php->handlerParam);
+                ntohs(ipPkt->ip6_plen) + 40, pd, php->handlerParam);
     }
 }
 
@@ -135,11 +261,77 @@ pcap_handler getPcapHandler(const char *ifaceName, pcap_t *handle)
     return pcapHandler;
 }
 
-void wlqifcap_loop(const char *const *interfaces, const char *filter,
+static char *getPcapFilter(const char *localNet)
+{
+    char *res = NULL;
+    const char *netBeg, *netEnd;
+    int len, iter;
+
+    /* localNet ex.: "192.168.1.0/24 192.168.8.0/24"
+     * result: "not(src net 192.168.1.0/24 or src net 192.168.8.0/24)or "
+     *         "not(dst net 192.168.1.0/24 or dst net 192.168.8.0/24)"
+     */
+    localNet += strspn(localNet, " \t");
+    if( *localNet ) {
+        res = strdup("not(");
+        len = 4;
+        for(iter = 0; iter < 2; ++iter) {
+            netBeg = localNet;
+            while( *netBeg ) {
+                if( netBeg != localNet ) {
+                    res = realloc(res, len + 5);
+                    strcpy(res + len, " or ");
+                    len += 4;
+                }
+                netEnd = netBeg + strcspn(netBeg, " \t");
+                res = realloc(res, len + netEnd - netBeg + 9);
+                strcpy(res + len, iter == 0 ? "src net " : "dst net ");
+                len += 8;
+                strncpy(res + len, netBeg, netEnd - netBeg);
+                len += netEnd - netBeg;
+                netBeg = netEnd + strspn(netEnd, " \t");
+            }
+            if( iter == 0 ) {
+                res = realloc(res, len + 9);
+                strcpy(res + len, ")or not(");
+                len += 8;
+            }
+        }
+        res = realloc(res, len + 2);
+        strcpy(res + len, ")");
+    }
+    return res;
+}
+
+static struct LocalNet *getLocalNets(const char *localNetStr)
+{
+    struct LocalNet *res = NULL;
+    const char *netBeg, *netEnd;
+    int localNetCount = 0;
+
+    localNetStr += strspn(localNetStr, " \t");
+    if( *localNetStr ) {
+        netBeg = localNetStr;
+        while( *netBeg ) {
+            netEnd = netBeg + strcspn(netBeg, " \t");
+            res = realloc(res, (localNetCount+1) * sizeof(struct LocalNet));
+            parseLocalNet(res + localNetCount, netBeg, netEnd - netBeg);
+            ++localNetCount;
+            netBeg = netEnd + strspn(netEnd, " \t");
+        }
+        res = realloc(res, (localNetCount+1) * sizeof(struct LocalNet));
+        res[localNetCount].version = 0;
+    }
+    return res;
+}
+
+void wlqifcap_loop(const char *const *interfaces, const char *localNet,
         void (*ipv4handler)(const char *ifaceName, struct in_addr src,
-            struct in_addr dst, unsigned pktlen, void *handlerParam),
+            struct in_addr dst, unsigned pktlen, PacketDirection,
+            void *handlerParam),
         void (*ipv6handler)(const char *ifaceName, const struct in6_addr *src,
-            const struct in6_addr *dst, unsigned pktlen, void *handlerParam),
+            const struct in6_addr *dst, unsigned pktlen, PacketDirection,
+            void *handlerParam),
         void *handlerParam)
 {
     pcap_if_t *allDevs, *curDev;
@@ -147,7 +339,12 @@ void wlqifcap_loop(const char *const *interfaces, const char *filter,
     struct PcapHandlerParam *handlers = NULL, *curHandler;
     int handlerCount = 0, nfds = 0;
     fd_set fds;
+    char *pcapFilter;
+    struct LocalNet *localNets;
 
+    if( localNet != NULL )
+        pcapFilter = getPcapFilter(localNet);
+    localNets = getLocalNets(localNet);
     if( pcap_findalldevs(&allDevs, errbuf) != 0 ) {
         fprintf(stderr, "pcap_findalldevs: %s\n", errbuf);
         exit(1);
@@ -195,7 +392,7 @@ void wlqifcap_loop(const char *const *interfaces, const char *filter,
             pcap_close(handle);
             continue;
         }
-        if( filter != NULL ) {
+        if( pcapFilter != NULL ) {
             struct bpf_program bfpprog;
             bpf_u_int32 net, mask;
 
@@ -204,7 +401,7 @@ void wlqifcap_loop(const char *const *interfaces, const char *filter,
                         curDev->name);
                 net = PCAP_NETMASK_UNKNOWN;
             }
-            if( pcap_compile(handle, &bfpprog, filter, 1, net) != -1 ) {
+            if( pcap_compile(handle, &bfpprog, pcapFilter, 1, net) != -1) {
                 if( pcap_setfilter(handle, &bfpprog) == -1 ) {
                     fprintf(stderr, "WARN: couldn't install filter: %s\n",
                             pcap_geterr(handle));
@@ -227,8 +424,10 @@ void wlqifcap_loop(const char *const *interfaces, const char *filter,
         curHandler->selectableFd = selectableFd;
         if( selectableFd >= nfds )
             nfds = selectableFd + 1;
+        curHandler->localNets = localNets;
     }
     pcap_freealldevs(allDevs);
+    free(pcapFilter);
     wlqconf_switchToTargetUser();
     FD_ZERO(&fds);
     while( 1 ) {

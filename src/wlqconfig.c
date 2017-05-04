@@ -12,7 +12,7 @@ static const char WLQCONFDIR[] = "/etc/wilqifstats.d";
 
 static const char *const *gInterfaces = NULL;
 static const char *gSwitchUser = "www-data";
-static const char *gFilter = "not src net 192.168 or not dst net 192.168";
+static const char *gLocalNet = "192.168.0.0/16";
 static const char *gStatsDir = "/var/lib/wilqifstats";
 
 static int parseParam(const char *name, const char *value)
@@ -40,8 +40,8 @@ static int parseParam(const char *name, const char *value)
         gInterfaces = interfaces;
     }else if( !strcmp(name, "srvuser") ) {
         gSwitchUser = strdup(value);
-    }else if( !strcmp(name, "filter") ) {
-        gFilter = strdup(value);
+    }else if( !strcmp(name, "localnet") ) {
+        gLocalNet = strdup(value);
     }else if( !strcmp(name, "statsdir") ) {
         gStatsDir = strdup(value);
     }else{
@@ -184,9 +184,9 @@ const char *const *wlqconf_getInterfaces(void)
     return gInterfaces;
 }
 
-const char *wlqconf_getFilter(void)
+const char *wlqconf_getLocalNet(void)
 {
-    return gFilter;
+    return gLocalNet;
 }
 
 const char *wlqconf_getStatsDir(void)

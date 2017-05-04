@@ -7,6 +7,6 @@ void wlqconf_createStatsDir(void);
 void wlqconf_switchToTargetUser(void);
 const char *const *wlqconf_getInterfaces(void);
 const char *wlqconf_getStatsDir(void);
-const char *wlqconf_getFilter(void);
+const char *wlqconf_getLocalNet(void);
 
 #endif /* WLQCONFIG_H */

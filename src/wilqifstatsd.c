@@ -132,7 +132,7 @@ static void saveStats(WilqStats *wstats, int clearStats)
 
 static void ipv4PacketHandler(const char *ifaceName,
         struct in_addr src, struct in_addr dst,
-        unsigned pktlen, void *handlerParam)
+        unsigned pktlen, PacketDirection pd, void *handlerParam)
 {
     int i;
     struct in_addr local, remote;
@@ -146,22 +146,10 @@ static void ipv4PacketHandler(const char *ifaceName,
         saveStats(wstats, 1);
         wstats->statHour = curHour;
     }
-    if( ! memcmp(&src.s_addr, localnet, 2) ) {
-        if( ! memcmp(&dst.s_addr, localnet, 2) ) {
-            printf("local packet: %s", inet_ntoa(src));
-            printf(" -> %s\n", inet_ntoa(dst));
-            fflush(stdout);
-            return;
-        }
+    if( pd == PD_LOCAL_TO_REMOTE ) {
         local = src;
         remote = dst;
     }else{
-        if( memcmp(&dst.s_addr, localnet, 2) ) {
-            printf("martian: %s", inet_ntoa(src));
-            printf(" -> %s\n", inet_ntoa(dst));
-            fflush(stdout);
-            return;
-        }
         local = dst;
         remote = src;
     }
@@ -195,7 +183,8 @@ static void ipv4PacketHandler(const char *ifaceName,
 }
 
 void ipv6PacketHandler(const char *ifaceName, const struct in6_addr *src,
-    const struct in6_addr *dst, unsigned pktlen, void *handlerParam)
+    const struct in6_addr *dst, unsigned pktlen, PacketDirection pd,
+    void *handlerParam)
 {
     char srcstr[INET6_ADDRSTRLEN], dststr[INET6_ADDRSTRLEN];
 
@@ -240,7 +229,7 @@ int main(int argc, char *argv[])
     sigaction(SIGTERM, &sa, NULL);
     sa.sa_handler = capture_dump;
     sigaction(SIGHUP, &sa, NULL);
-    wlqifcap_loop(wlqconf_getInterfaces(), wlqconf_getFilter(),
+    wlqifcap_loop(wlqconf_getInterfaces(), wlqconf_getLocalNet(),
             ipv4PacketHandler, ipv6PacketHandler, &stats);
     return 0;
 }
