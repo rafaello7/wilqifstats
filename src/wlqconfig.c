@@ -12,7 +12,7 @@ static const char WLQCONFDIR[] = "/etc/wilqifstats.d";
 
 static const char *const *gInterfaces = NULL;
 static const char *gSwitchUser = "www-data";
-static const char *gLocalNet = "192.168.0.0/16";
+static const char *gLocalNet = NULL;
 static const char *gStatsDir = "/var/lib/wilqifstats";
 
 static int parseParam(const char *name, const char *value)

@@ -136,7 +136,6 @@ static void ipv4PacketHandler(const char *ifaceName,
 {
     int i;
     struct in_addr local, remote;
-    unsigned char localnet[2] = { 192, 168 };
     time_t curTm = time(NULL);
     WilqStats *wstats = handlerParam;
     IfaceStats *ifaceStats;

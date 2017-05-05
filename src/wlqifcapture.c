@@ -261,45 +261,49 @@ pcap_handler getPcapHandler(const char *ifaceName, pcap_t *handle)
     return pcapHandler;
 }
 
-static char *getPcapFilter(const char *localNet)
+static char *getPcapFilter(const struct LocalNet *localNets)
 {
     char *res = NULL;
-    const char *netBeg, *netEnd;
-    int len, iter;
+    int i, len, addrlen, iter;
+    char addrstr[INET6_ADDRSTRLEN+20];
 
-    /* localNet ex.: "192.168.1.0/24 192.168.8.0/24"
-     * result: "not(src net 192.168.1.0/24 or src net 192.168.8.0/24)or "
+    /* result: "not(src net 192.168.1.0/24 or src net 192.168.8.0/24)or "
      *         "not(dst net 192.168.1.0/24 or dst net 192.168.8.0/24)"
      */
-    localNet += strspn(localNet, " \t");
-    if( *localNet ) {
-        res = strdup("not(");
-        len = 4;
-        for(iter = 0; iter < 2; ++iter) {
-            netBeg = localNet;
-            while( *netBeg ) {
-                if( netBeg != localNet ) {
-                    res = realloc(res, len + 5);
-                    strcpy(res + len, " or ");
-                    len += 4;
-                }
-                netEnd = netBeg + strcspn(netBeg, " \t");
-                res = realloc(res, len + netEnd - netBeg + 9);
-                strcpy(res + len, iter == 0 ? "src net " : "dst net ");
-                len += 8;
-                strncpy(res + len, netBeg, netEnd - netBeg);
-                len += netEnd - netBeg;
-                netBeg = netEnd + strspn(netEnd, " \t");
+    res = strdup("not(");
+    len = 4;
+    for(iter = 0; iter < 2; ++iter) {
+        for(i = 0; localNets[i].version; ++i) {
+            if( i ) {
+                res = realloc(res, len + 5);
+                strcpy(res + len, " or ");
+                len += 4;
             }
-            if( iter == 0 ) {
-                res = realloc(res, len + 9);
-                strcpy(res + len, ")or not(");
-                len += 8;
+            if( localNets[i].version == 6 ) {
+                inet_ntop(AF_INET6, &localNets[i].net6, addrstr,
+                        sizeof(addrstr));
+                sprintf(addrstr + strlen(addrstr), "/%d", localNets[i].masklen);
+            }else{
+                inet_ntop(AF_INET, &localNets[i].net4, addrstr,
+                        sizeof(addrstr));
+                sprintf(addrstr + strlen(addrstr), "/%d", localNets[i].masklen);
             }
+            addrlen = strlen(addrstr);
+            res = realloc(res, len + 9 + addrlen);
+            strcpy(res + len, iter == 0 ? "src net " : "dst net ");
+            len += 8;
+            strcpy(res + len, addrstr);
+            len += addrlen;
         }
-        res = realloc(res, len + 2);
-        strcpy(res + len, ")");
+        if( iter == 0 ) {
+            res = realloc(res, len + 9);
+            strcpy(res + len, ")or not(");
+            len += 8;
+        }
     }
+    res = realloc(res, len + 2);
+    strcpy(res + len, ")");
+    printf("pcap filter: %s\n", res);
     return res;
 }
 
@@ -325,6 +329,58 @@ static struct LocalNet *getLocalNets(const char *localNetStr)
     return res;
 }
 
+static int hiBitsCount(uint32_t mask)
+{
+    int res = 32;
+    uint32_t mcmp = 0xffffffff;
+
+    while( mask != mcmp && res > 0 ) {
+        --res;
+        mcmp <<= 1;
+    }
+    return res;
+}
+
+static void getLocalNetFromPcap(const pcap_addr_t *addr,
+        struct LocalNet **localNets)
+{
+    int idx = 0;
+    struct LocalNet *cur;
+    char addrstr[INET6_ADDRSTRLEN];
+
+    if( *localNets != NULL ) {
+        while( (*localNets)[idx].version != 0 )
+            ++idx;
+    }
+    *localNets = realloc(*localNets, (idx+2) * sizeof(struct LocalNet));
+    (*localNets)[idx + 1].version = 0;
+    cur = *localNets + idx;
+    if( addr->addr->sa_family == AF_INET6 ) {
+        const struct in6_addr *a, *m;
+
+        a = &((const struct sockaddr_in6*)addr->addr)->sin6_addr;
+        m = &((const struct sockaddr_in6*)addr->netmask)->sin6_addr;
+        cur->masklen = 0;
+        for(idx = 0; idx < 4; ++idx) {
+            cur->net6.s6_addr32[idx] = a->s6_addr32[idx] & m->s6_addr32[idx];
+            cur->masklen += hiBitsCount(ntohl(m->s6_addr32[idx]));
+        }
+        cur->version = 6;
+        printf("added local net %s/%d\n", inet_ntop(AF_INET6,
+                    &cur->net6, addrstr, sizeof(addrstr)), cur->masklen);
+    }else{
+        const struct in_addr *a, *m;
+
+        a = &((const struct sockaddr_in*)addr->addr)->sin_addr;
+        m = &((const struct sockaddr_in*)addr->netmask)->sin_addr;
+        cur->net4.s_addr = a->s_addr & m->s_addr;
+        cur->masklen = hiBitsCount(ntohl(m->s_addr));
+        cur->version = 4;
+        printf("added local net %s/%d\n", inet_ntop(AF_INET,
+                    &cur->net4, addrstr, sizeof(addrstr)), cur->masklen);
+    }
+}
+
 void wlqifcap_loop(const char *const *interfaces, const char *localNet,
         void (*ipv4handler)(const char *ifaceName, struct in_addr src,
             struct in_addr dst, unsigned pktlen, PacketDirection,
@@ -337,20 +393,21 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
     pcap_if_t *allDevs, *curDev;
     char errbuf[PCAP_ERRBUF_SIZE];
     struct PcapHandlerParam *handlers = NULL, *curHandler;
-    int handlerCount = 0, nfds = 0;
+    int handlerCount = 0, nfds = 0, hasExtLocalNets;
     fd_set fds;
     char *pcapFilter;
-    struct LocalNet *localNets;
+    struct LocalNet *localNets = NULL;
+    struct bpf_program bfpprog;
 
     if( localNet != NULL )
-        pcapFilter = getPcapFilter(localNet);
-    localNets = getLocalNets(localNet);
+        localNets = getLocalNets(localNet);
+    hasExtLocalNets = localNets != NULL;
     if( pcap_findalldevs(&allDevs, errbuf) != 0 ) {
         fprintf(stderr, "pcap_findalldevs: %s\n", errbuf);
         exit(1);
     }
     for(curDev = allDevs; curDev != NULL; curDev = curDev->next) {
-        struct pcap_addr *addr = curDev->addresses;
+        pcap_addr_t *addr = curDev->addresses;
         int ifno, isInet = 0, selectableFd;
         pcap_handler pcapHandler;
         pcap_t *handle;
@@ -363,10 +420,14 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
                 continue;
         }else if( curDev->flags & PCAP_IF_LOOPBACK )
             continue;
-        for(addr = curDev->addresses; !isInet && addr; addr = addr->next) {
+        for(addr = curDev->addresses; addr; addr = addr->next) {
             if( addr->addr->sa_family == AF_INET ||
                     addr->addr->sa_family == AF_INET6 )
+            {
                 isInet = 1;
+                if( ! hasExtLocalNets )
+                    getLocalNetFromPcap(addr, &localNets);
+            }
         }
         if( ! isInet )
             continue;
@@ -392,26 +453,6 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
             pcap_close(handle);
             continue;
         }
-        if( pcapFilter != NULL ) {
-            struct bpf_program bfpprog;
-            bpf_u_int32 net, mask;
-
-            if(pcap_lookupnet(curDev->name, &net, &mask, errbuf) == -1) {
-                fprintf(stderr, "WARN: can't get netmask for device %s\n",
-                        curDev->name);
-                net = PCAP_NETMASK_UNKNOWN;
-            }
-            if( pcap_compile(handle, &bfpprog, pcapFilter, 1, net) != -1) {
-                if( pcap_setfilter(handle, &bfpprog) == -1 ) {
-                    fprintf(stderr, "WARN: couldn't install filter: %s\n",
-                            pcap_geterr(handle));
-                }
-                pcap_freecode(&bfpprog);
-            }else{
-                fprintf(stderr, "WARN: couldn't parse filter: %s\n",
-                        pcap_geterr(handle));
-            }
-        }
         handlers = realloc(handlers,
                 ++handlerCount * sizeof(struct PcapHandlerParam));
         curHandler = handlers + handlerCount - 1;
@@ -424,9 +465,29 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
         curHandler->selectableFd = selectableFd;
         if( selectableFd >= nfds )
             nfds = selectableFd + 1;
-        curHandler->localNets = localNets;
     }
     pcap_freealldevs(allDevs);
+    if( handlerCount == 0 ) {
+        fprintf(stderr, "no network interface\n");
+        exit(1);
+    }
+    pcapFilter = getPcapFilter(localNets);
+    for(int i = 0; i < handlerCount; ++i) {
+        curHandler = handlers + i;
+        if( pcap_compile(curHandler->handle, &bfpprog, pcapFilter, 1,
+                    PCAP_NETMASK_UNKNOWN) != -1)
+        {
+            if( pcap_setfilter(curHandler->handle, &bfpprog) == -1 ) {
+                fprintf(stderr, "WARN: couldn't install filter: %s\n",
+                        pcap_geterr(curHandler->handle));
+            }
+            pcap_freecode(&bfpprog);
+        }else{
+            fprintf(stderr, "WARN: couldn't parse filter: %s\n",
+                    pcap_geterr(curHandler->handle));
+        }
+        curHandler->localNets = localNets;
+    }
     free(pcapFilter);
     wlqconf_switchToTargetUser();
     FD_ZERO(&fds);
