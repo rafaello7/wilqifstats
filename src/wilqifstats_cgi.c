@@ -117,6 +117,7 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
     struct IpStatistics stats;
     MonthlyStat *mstats = NULL;
     int rd, statCount = 0;
+    int firstDay = wlqconf_getFirstDay();
 
     sprintf(dname, "%s/%s", wlqconf_getStatsDir(), ifaceName);
     dp = opendir(dname);
@@ -142,8 +143,8 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
             int month = t->tm_mon + 1;
             int mday = t->tm_mday;
             int dhour = t->tm_hour;
-            if( mday == 1 ) {
-                // 1st day is included in previous month
+            if( mday < firstDay ) {
+                // included in previous month
                 if( month == 0 ) {
                     --year;
                     month = 11;
@@ -393,14 +394,32 @@ static char *monthName(char *buf, int buflen, int month)
 
 static void dumpIfaceStat(const IfaceStat *is)
 {
-    char addrbuf[40], monthbuf[20];
+    char addrbuf[40], monthbuf1[20], monthbuf2[20];
     int idx;
+    int firstDay = wlqconf_getFirstDay();
     unsigned netLimit = wlqconf_getNetLimit();
 
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
-        printf("<h3>%s %04d&emsp;&emsp;",
-                monthName(monthbuf, sizeof(monthbuf), ms->month), ms->year);
+        printf("<h3>");
+        if( firstDay == 1 )
+            printf("%s %04d", monthName(monthbuf1, sizeof(monthbuf1),
+                        ms->month), ms->year);
+        else{
+            if( ms->month == 12 ) {
+                printf("%d %s %04d &minus; %d %s %04d", firstDay,
+                        monthName(monthbuf1, sizeof(monthbuf1), 12), ms->year,
+                        firstDay - 1,
+                        monthName(monthbuf2, sizeof(monthbuf2), 1), ms->year+1);
+            }else{
+                printf("%d %s &minus; %d %s %04d", firstDay,
+                        monthName(monthbuf1, sizeof(monthbuf1), ms->month),
+                        firstDay - 1,
+                        monthName(monthbuf2, sizeof(monthbuf2), ms->month+1),
+                        ms->year);
+            }
+        }
+        printf("&emsp;&emsp;");
         if( ms->nbytes < 1073741824 )
             printf("%.3f MiB", ms->nbytes / 1048576.0);
         else
@@ -428,7 +447,7 @@ static void dumpIfaceStat(const IfaceStat *is)
             fflush(stdout);
             printf("<tr style='display: none'><td></td>"
                     "<td colspan='3'><table><tbody>\n");
-            for(int didx = 1; didx < 32; ++didx) {
+            for(int didx = firstDay - 1; didx < firstDay + 30; ++didx) {
                 int mday = didx % 31;
                 DailyStatByHost *dsbh = NULL;
                 for(int i = 0; i < ms->dailyStat[mday].hostCount; ++i) {
@@ -479,7 +498,7 @@ static void dumpIfaceStat(const IfaceStat *is)
         printf("</tbody></table><br>\n");
         printf("<table><thead><tr><th colspan='3'>daily</th>"
                 "</tr></thead><tbody>\n");
-        for(int didx = 1; didx < 32; ++didx) {
+        for(int didx = firstDay - 1; didx < firstDay + 30; ++didx) {
             int mday = didx % 31;
             if( ms->dailyStat[mday].nbytes == 0 )
                 continue;
@@ -637,7 +656,7 @@ static void dumpStats(const IfaceStat *is)
         dumpIfaceStat(is);
         ++is;
     }
-    printf("</body></html>\n");
+    printf("<div style='margin-top: 4em'></div></body></html>\n");
 }
 
 static void dumpLookup(const char *addr)
