@@ -399,12 +399,19 @@ static void dumpIfaceStat(const IfaceStat *is)
 
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
-        printf("<h3>%s %04d&emsp; %.3f MiB",
-                monthName(monthbuf, sizeof(monthbuf), ms->month),
-                ms->year, ms->nbytes / 1048576.0);
+        printf("<h3>%s %04d&emsp;&emsp;",
+                monthName(monthbuf, sizeof(monthbuf), ms->month), ms->year);
+        if( ms->nbytes < 1073741824 )
+            printf("%.3f MiB", ms->nbytes / 1048576.0);
+        else
+            printf("%.3f GiB", ms->nbytes / 1073741824.0);
         if( netLimit != 0 ) {
-            printf("&emsp;(remain: %.3f GiB)",
-                    netLimit - ms->nbytes / 1073741824.0);
+            printf("&emsp;&emsp;(remain: ");
+            if( netLimit - ms->nbytes / 1073741824.0 < 1.0 )
+                printf("%3f MiB", netLimit - ms->nbytes / 1048576.0);
+            else
+                printf("%.3f GiB", netLimit - ms->nbytes / 1073741824.0);
+            printf(")");
 
         }
         printf("</h3>\n");
