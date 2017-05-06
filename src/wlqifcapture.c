@@ -528,6 +528,7 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
     }
     free(pcapFilter);
     wlqconf_switchToTargetUser();
+    fflush(stdout);
     FD_ZERO(&fds);
     while( 1 ) {
         int i;

@@ -285,7 +285,6 @@ int main(int argc, char *argv[])
             fprintf(stderr, "chown(%s): %s\n", statsDir, strerror(errno));
     }
     loadStats(&stats);
-    fflush(stdout);
     gWstats = &stats;
     struct sigaction sa;
     sa.sa_handler = capture_finish;
