@@ -14,8 +14,10 @@
 
 typedef struct {
     char *ifaceName;
-    ip_statistics *stats;
-    int statCount;
+    ipv4_statistics *v4stats;
+    int v4statCount;
+    ipv6_statistics *v6stats;
+    int v6statCount;
     unsigned unsavedBytes;
 } IfaceStats;
 
@@ -59,22 +61,36 @@ static void loadStats(WilqStats *wstats)
                 ++wstats->ifaceCount * sizeof(IfaceStats));
         ifaceStats = wstats->ifaceStats + wstats->ifaceCount - 1;
         ifaceStats->ifaceName = strdup(de->d_name);
-        ifaceStats->stats = NULL;
-        ifaceStats->statCount = 0;
+        ifaceStats->v4stats = NULL;
+        ifaceStats->v4statCount = 0;
+        ifaceStats->v6stats = NULL;
+        ifaceStats->v6statCount = 0;
         ifaceStats->unsavedBytes = 0;
+        int rd;
         while( 1 ) {
-            ifaceStats->stats = realloc(ifaceStats->stats,
-                    (ifaceStats->statCount + 16) * sizeof(ip_statistics));
-            int rd = fread(ifaceStats->stats + ifaceStats->statCount,
-                    sizeof(ip_statistics), 16, fp);
-            if( rd < 0 ) {
-                fprintf(stderr, "%s read error: %s\n",
-                        fname, strerror(errno));
-                exit(1);
-            }
-            ifaceStats->statCount += rd;
-            if( rd < 16 )
+            ifaceStats->v4stats = realloc(ifaceStats->v4stats,
+                    (ifaceStats->v4statCount + 1) *
+                    sizeof(ipv4_statistics));
+            rd = fread(ifaceStats->v4stats + ifaceStats->v4statCount,
+                    sizeof(ipv4_statistics), 1, fp);
+            if( rd < 1 ||
+                    ifaceStats->v4stats[ifaceStats->v4statCount].nbytes == 0)
                 break;
+            ++ifaceStats->v4statCount;
+        }
+        while( rd == 1 ) {
+            ifaceStats->v6stats = realloc(ifaceStats->v6stats,
+                    (ifaceStats->v6statCount + 1) *
+                    sizeof(ipv6_statistics));
+            rd = fread(ifaceStats->v6stats + ifaceStats->v6statCount,
+                    sizeof(ipv6_statistics), 1, fp);
+            if( rd == 1 )
+                ++ifaceStats->v6statCount;
+        }
+        if( rd < 0 ) {
+            fprintf(stderr, "%s read error: %s\n",
+                    fname, strerror(errno));
+            exit(1);
         }
         fclose(fp);
     }
@@ -107,13 +123,23 @@ static void saveIfaceStats(IfaceStats *ifaceStats, unsigned statHour,
             exit(1);
         }
     }
-    fwrite(ifaceStats->stats, sizeof(ip_statistics),
-            ifaceStats->statCount, fp);
+    fwrite(ifaceStats->v4stats, sizeof(ipv4_statistics),
+            ifaceStats->v4statCount, fp);
+    if( ifaceStats->v6statCount > 0 ) {
+        ipv4_statistics endstat;
+        memset(&endstat, 0, sizeof(endstat));
+        fwrite(&endstat, sizeof(ipv4_statistics), 1, fp);
+        fwrite(ifaceStats->v6stats, sizeof(ipv6_statistics),
+                ifaceStats->v6statCount, fp);
+    }
     fclose(fp);
     if( clearStats ) {
-        free(ifaceStats->stats);
-        ifaceStats->stats = NULL;
-        ifaceStats->statCount = 0;
+        free(ifaceStats->v4stats);
+        ifaceStats->v4stats = NULL;
+        ifaceStats->v4statCount = 0;
+        free(ifaceStats->v6stats);
+        ifaceStats->v6stats = NULL;
+        ifaceStats->v6statCount = 0;
     }
     ifaceStats->unsavedBytes = 0;
 }
@@ -162,20 +188,20 @@ static void ipv4PacketHandler(const char *ifaceName,
         wstats->ifaceStats[i].ifaceName = strdup(ifaceName);
     }
     ifaceStats = wstats->ifaceStats + i;
-    for(i = 0; i < ifaceStats->statCount; ++i) {
-        if( !memcmp(&ifaceStats->stats[i].local, &local.s_addr, 4) &&
-                !memcmp(&ifaceStats->stats[i].remote, &remote.s_addr, 4) )
+    for(i = 0; i < ifaceStats->v4statCount; ++i) {
+        if( !memcmp(&ifaceStats->v4stats[i].local, &local.s_addr, 4) &&
+                !memcmp(&ifaceStats->v4stats[i].remote, &remote.s_addr, 4) )
             break;
     }
-    if( i == ifaceStats->statCount ) {
-        ++ifaceStats->statCount;
-        ifaceStats->stats = realloc(ifaceStats->stats,
-                ifaceStats->statCount * sizeof(ip_statistics));
-        ifaceStats->stats[i].local = local.s_addr;
-        ifaceStats->stats[i].remote = remote.s_addr;
-        ifaceStats->stats[i].nbytes = 0;
+    if( i == ifaceStats->v4statCount ) {
+        ++ifaceStats->v4statCount;
+        ifaceStats->v4stats = realloc(ifaceStats->v4stats,
+                ifaceStats->v4statCount * sizeof(ipv4_statistics));
+        ifaceStats->v4stats[i].local = local.s_addr;
+        ifaceStats->v4stats[i].remote = remote.s_addr;
+        ifaceStats->v4stats[i].nbytes = 0;
     }
-    ifaceStats->stats[i].nbytes += pktlen;
+    ifaceStats->v4stats[i].nbytes += pktlen;
     ifaceStats->unsavedBytes += pktlen;
     if( ifaceStats->unsavedBytes >= 50 * 1024 * 1024 )
         saveIfaceStats(ifaceStats, curHour, 0);
@@ -185,11 +211,51 @@ void ipv6PacketHandler(const char *ifaceName, const struct in6_addr *src,
     const struct in6_addr *dst, unsigned pktlen, PacketDirection pd,
     void *handlerParam)
 {
-    char srcstr[INET6_ADDRSTRLEN], dststr[INET6_ADDRSTRLEN];
+    int i;
+    const struct in6_addr *local, *remote;
+    time_t curTm = time(NULL);
+    WilqStats *wstats = handlerParam;
+    IfaceStats *ifaceStats;
 
-    printf("ipv6 packet %s -> %s, %d bytes, ignored\n",
-            inet_ntop(AF_INET6, src, srcstr, sizeof(srcstr)),
-            inet_ntop(AF_INET6, dst, dststr, sizeof(dststr)), pktlen);
+    unsigned curHour = curTm / 3600;
+    if( curHour != wstats->statHour ) {
+        saveStats(wstats, 1);
+        wstats->statHour = curHour;
+    }
+    if( pd == PD_LOCAL_TO_REMOTE ) {
+        local = src;
+        remote = dst;
+    }else{
+        local = dst;
+        remote = src;
+    }
+    for(i = 0; i < wstats->ifaceCount
+            && strcmp(wstats->ifaceStats[i].ifaceName, ifaceName); ++i)
+        ;
+    if( i == wstats->ifaceCount ) {
+        wstats->ifaceStats = realloc(wstats->ifaceStats,
+                ++wstats->ifaceCount * sizeof(IfaceStats));
+        memset(wstats->ifaceStats + i, 0, sizeof(IfaceStats));
+        wstats->ifaceStats[i].ifaceName = strdup(ifaceName);
+    }
+    ifaceStats = wstats->ifaceStats + i;
+    for(i = 0; i < ifaceStats->v6statCount; ++i) {
+        if( !memcmp(ifaceStats->v6stats[i].local.s6_addr, local->s6_addr, 16) &&
+            !memcmp(ifaceStats->v6stats[i].remote.s6_addr, remote->s6_addr, 16))
+            break;
+    }
+    if( i == ifaceStats->v6statCount ) {
+        ++ifaceStats->v6statCount;
+        ifaceStats->v6stats = realloc(ifaceStats->v6stats,
+                ifaceStats->v6statCount * sizeof(ipv6_statistics));
+        ifaceStats->v6stats[i].local = *local;
+        ifaceStats->v6stats[i].remote = *remote;
+        ifaceStats->v6stats[i].nbytes = 0;
+    }
+    ifaceStats->v6stats[i].nbytes += pktlen;
+    ifaceStats->unsavedBytes += pktlen;
+    if( ifaceStats->unsavedBytes >= 50 * 1024 * 1024 )
+        saveIfaceStats(ifaceStats, curHour, 0);
 }
 
 static WilqStats *gWstats;

@@ -78,8 +78,8 @@ static int isLocalNet4(const struct PcapHandlerParam *php, struct in_addr addr)
     for(i = 0; i < php->localNets[i].version; ++i) {
         if( php->localNets[i].version != 4 )
             continue;
-        mask = ~((1 << php->localNets[i].masklen) - 1);
-        if( (php->localNets[i].net4.s_addr & mask) == (addr.s_addr & mask) )
+        mask = htonl(~((1 << (32 - php->localNets[i].masklen)) - 1));
+        if( php->localNets[i].net4.s_addr == (addr.s_addr & mask) )
             return 1;
     }
     return 0;
@@ -95,14 +95,13 @@ static int isLocalNet6(const struct PcapHandlerParam *php,
             continue;
         masklen = php->localNets[i].masklen;
         isEqual = 1;
-        for(j = 0; isEqual && masklen >= 32; masklen -= 32) {
-            if( php->localNets[i].net6.s6_addr32[j] != addr->s6_addr32[j] )
+        for(j = 0; isEqual && masklen >= 32; ++j, masklen -= 32) {
+            if(php->localNets[i].net6.s6_addr32[j] != addr->s6_addr32[j])
                 isEqual = 0;
         }
         if( isEqual && masklen ) {
-            uint32_t mask = ~((1 << masklen) - 1);
-            if( (php->localNets[i].net6.s6_addr[j] & mask)
-                    != (addr->s6_addr[j] & mask) )
+            uint32_t mask = htonl(~((1 << (32 - masklen)) - 1));
+            if(php->localNets[i].net6.s6_addr[j] != (addr->s6_addr32[j] & mask))
                 isEqual = 0;
         }
         if( isEqual )
@@ -341,43 +340,84 @@ static int hiBitsCount(uint32_t mask)
     return res;
 }
 
-static void getLocalNetFromPcap(const pcap_addr_t *addr,
+static void getLocalNetsFromPcap(const pcap_addr_t *addr,
         struct LocalNet **localNets)
 {
-    int idx = 0;
     struct LocalNet *cur;
     char addrstr[INET6_ADDRSTRLEN];
 
-    if( *localNets != NULL ) {
-        while( (*localNets)[idx].version != 0 )
-            ++idx;
-    }
-    *localNets = realloc(*localNets, (idx+2) * sizeof(struct LocalNet));
-    (*localNets)[idx + 1].version = 0;
-    cur = *localNets + idx;
-    if( addr->addr->sa_family == AF_INET6 ) {
-        const struct in6_addr *a, *m;
+    while( addr != NULL ) {
+        if( addr->addr->sa_family == AF_INET6 ) {
+            const struct in6_addr *a, *m;
+            int masklen = 0, idx = 0;
+            struct in6_addr inaddr;
 
-        a = &((const struct sockaddr_in6*)addr->addr)->sin6_addr;
-        m = &((const struct sockaddr_in6*)addr->netmask)->sin6_addr;
-        cur->masklen = 0;
-        for(idx = 0; idx < 4; ++idx) {
-            cur->net6.s6_addr32[idx] = a->s6_addr32[idx] & m->s6_addr32[idx];
-            cur->masklen += hiBitsCount(ntohl(m->s6_addr32[idx]));
+            a = &((const struct sockaddr_in6*)addr->addr)->sin6_addr;
+            m = &((const struct sockaddr_in6*)addr->netmask)->sin6_addr;
+            for(int i = 0; i < 4; ++i) {
+                inaddr.s6_addr32[i] = a->s6_addr32[i] & m->s6_addr32[i];
+                masklen += hiBitsCount(ntohl(m->s6_addr32[i]));
+            }
+            if( *localNets != NULL ) {
+                while( (*localNets)[idx].version != 0 ) {
+                    cur = *localNets + idx;
+                    if( cur->version == 6 && masklen == cur->masklen
+                            && !memcmp(cur->net6.s6_addr, inaddr.s6_addr, 16) )
+                        break;
+                    ++idx;
+                }
+            }
+            if( *localNets == NULL || (*localNets)[idx].version == 0 ) {
+                *localNets = realloc(*localNets,
+                        (idx+2) * sizeof(struct LocalNet));
+                cur = *localNets + idx;
+                memcpy(cur->net6.s6_addr, inaddr.s6_addr, 16);
+                cur->masklen = masklen;
+                cur->version = 6;
+                printf("added local net %s/%d\n", inet_ntop(AF_INET6,
+                        &inaddr, addrstr, sizeof(addrstr)), masklen);
+                ++idx;
+                (*localNets)[idx].version = 0;
+            }else{
+                printf("local net %s/%d repeats\n", inet_ntop(AF_INET6,
+                        &inaddr, addrstr, sizeof(addrstr)), masklen);
+            }
+        }else if( addr->addr->sa_family == AF_INET ) {
+            const struct in_addr *a, *m;
+            struct in_addr inaddr;
+            int masklen, idx = 0;
+
+            a = &((const struct sockaddr_in*)addr->addr)->sin_addr;
+            m = &((const struct sockaddr_in*)addr->netmask)->sin_addr;
+            inaddr.s_addr = a->s_addr & m->s_addr;
+            masklen = hiBitsCount(ntohl(m->s_addr));
+
+            if( *localNets != NULL ) {
+                while( (*localNets)[idx].version != 0 ) {
+                    cur = *localNets + idx;
+                    if( cur->version == 4 && masklen == cur->masklen
+                            && cur->net4.s_addr == inaddr.s_addr )
+                        break;
+                    ++idx;
+                }
+            }
+            if( *localNets == NULL || (*localNets)[idx].version == 0 ) {
+                *localNets = realloc(*localNets,
+                        (idx+2) * sizeof(struct LocalNet));
+                cur = *localNets + idx;
+                cur->net4 = inaddr;
+                cur->masklen = masklen;
+                cur->version = 4;
+                printf("added local net %s/%d\n", inet_ntop(AF_INET,
+                            &inaddr, addrstr, sizeof(addrstr)), masklen);
+                ++idx;
+                (*localNets)[idx].version = 0;
+            }else{
+                printf("local net %s/%d repeats\n", inet_ntop(AF_INET,
+                            &inaddr, addrstr, sizeof(addrstr)), masklen);
+            }
         }
-        cur->version = 6;
-        printf("added local net %s/%d\n", inet_ntop(AF_INET6,
-                    &cur->net6, addrstr, sizeof(addrstr)), cur->masklen);
-    }else{
-        const struct in_addr *a, *m;
-
-        a = &((const struct sockaddr_in*)addr->addr)->sin_addr;
-        m = &((const struct sockaddr_in*)addr->netmask)->sin_addr;
-        cur->net4.s_addr = a->s_addr & m->s_addr;
-        cur->masklen = hiBitsCount(ntohl(m->s_addr));
-        cur->version = 4;
-        printf("added local net %s/%d\n", inet_ntop(AF_INET,
-                    &cur->net4, addrstr, sizeof(addrstr)), cur->masklen);
+        addr = addr->next;
     }
 }
 
@@ -412,6 +452,8 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
         pcap_handler pcapHandler;
         pcap_t *handle;
 
+        if( ! hasExtLocalNets && (curDev->flags & PCAP_IF_LOOPBACK) == 0 )
+            getLocalNetsFromPcap(curDev->addresses, &localNets);
         if( interfaces ) {
             for(ifno = 0; interfaces[ifno]
                     && strcmp(interfaces[ifno], curDev->name); ++ifno)
@@ -420,14 +462,10 @@ void wlqifcap_loop(const char *const *interfaces, const char *localNet,
                 continue;
         }else if( curDev->flags & PCAP_IF_LOOPBACK )
             continue;
-        for(addr = curDev->addresses; addr; addr = addr->next) {
+        for(addr = curDev->addresses; !isInet && addr; addr = addr->next) {
             if( addr->addr->sa_family == AF_INET ||
                     addr->addr->sa_family == AF_INET6 )
-            {
                 isInet = 1;
-                if( ! hasExtLocalNets )
-                    getLocalNetFromPcap(addr, &localNets);
-            }
         }
         if( ! isInet )
             continue;

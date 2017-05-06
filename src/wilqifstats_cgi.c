@@ -12,18 +12,32 @@
 #include <time.h>
 
 
+struct InetAddress {
+    int version;
+    union {
+        struct in_addr v4;
+        struct in6_addr v6;
+    };
+};
+
+struct IpStatistics {
+    struct InetAddress remote;
+    struct InetAddress local;
+    unsigned long long nbytes;
+};
+
 typedef struct {
-    in_addr_t remote;
+    struct InetAddress remote;
     unsigned long long nbytes;
 } HostStat;
 
 typedef struct {
-    in_addr_t host;
+    struct InetAddress host;
     unsigned long long nbytes;
 } MonthlyStatByHost;
 
 typedef struct {
-    in_addr_t host;
+    struct InetAddress host;
     unsigned long long nbytes;
     struct {
         unsigned long long nbytes;
@@ -51,6 +65,48 @@ typedef struct {
     int statCount;
 } IfaceStat;
 
+static int isAddrEq(const struct InetAddress *addr1,
+        const struct InetAddress *addr2)
+{
+    int res;
+
+    if( addr1->version != addr2->version )
+        res = 0;
+    else if( addr1->version == 4 ) {
+        res = addr1->v4.s_addr == addr2->v4.s_addr;
+    }else{
+        res = !memcmp(addr1->v6.s6_addr, addr2->v6.s6_addr, 16);
+    }
+    return res;
+}
+
+static int readStatsFromFile(FILE *fp, int isInet6, struct IpStatistics *stats)
+{
+    int rd;
+
+    if( isInet6 ) {
+        ipv6_statistics v6stats;
+        if( (rd = fread(&v6stats, sizeof(v6stats), 1, fp)) == 1 ) {
+            stats->remote.version = 6;
+            memcpy(stats->remote.v6.s6_addr, v6stats.remote.s6_addr, 16);
+            stats->local.version = 6;
+            memcpy(stats->local.v6.s6_addr, v6stats.local.s6_addr, 16);
+            stats->nbytes = v6stats.nbytes;
+        }
+    }else{
+        ipv4_statistics v4stats;
+
+        if( (rd = fread(&v4stats, sizeof(v4stats), 1, fp)) == 1 ) {
+            stats->remote.version = 4;
+            memcpy(&stats->remote.v4.s_addr, &v4stats.remote, 4);
+            stats->local.version = 4;
+            memcpy(&stats->local.v4.s_addr, &v4stats.local, 4);
+            stats->nbytes = v4stats.nbytes;
+        }
+    }
+    return rd;
+}
+
 static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
 {
     DIR *dp;
@@ -58,7 +114,7 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
     char dname[100], fname[120], *endp;
     unsigned hour;
     FILE *fp;
-    ip_statistics stats;
+    struct IpStatistics stats;
     MonthlyStat *mstats = NULL;
     int rd, statCount = 0;
 
@@ -113,11 +169,17 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
                 ++statCount;
             }
             MonthlyStat *ms = mstats + msIdx;
-            while( (rd = fread(&stats, sizeof(ip_statistics), 1, fp)) == 1 ) {
+            int isInet6 = 0;
+            while( (rd = readStatsFromFile(fp, isInet6, &stats)) == 1 ) {
+                if( stats.nbytes == 0 ) {
+                    isInet6 = 1;
+                    continue;
+                }
                 ms->nbytes += stats.nbytes;
                 ms->dailyStat[mday-1].nbytes += stats.nbytes;
                 int i = 0;
-                while( i < ms->hostCount && ms->hosts[i].host != stats.local )
+                while( i < ms->hostCount
+                        && !isAddrEq(&ms->hosts[i].host, &stats.local) )
                     ++i;
                 if( i == ms->hostCount ) {
                     ms->hosts = realloc(ms->hosts, ++ms->hostCount *
@@ -128,8 +190,9 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
                 MonthlyStatByHost *msbh = ms->hosts + i;
                 msbh->nbytes += stats.nbytes;
                 i = 0;
-                while( i < ms->dailyStat[mday-1].hostCount
-                        && ms->dailyStat[mday-1].hosts[i].host != stats.local )
+                while( i < ms->dailyStat[mday-1].hostCount &&
+                        !isAddrEq(&ms->dailyStat[mday-1].hosts[i].host,
+                            &stats.local) )
                     ++i;
                 if( i == ms->dailyStat[mday-1].hostCount ) {
                     ms->dailyStat[mday-1].hosts =
@@ -146,7 +209,8 @@ static void loadIfaceStats(const char *ifaceName, IfaceStat *ifaceStat)
                 HostStat *hs = dsbh->hourlyStat[dhour].hosts;
                 int hostCount = dsbh->hourlyStat[dhour].hostCount;
                 int hsIdx = 0;
-                while( hsIdx < hostCount && hs[hsIdx].remote != stats.remote )
+                while( hsIdx < hostCount &&
+                        !isAddrEq(&hs[hsIdx].remote, &stats.remote) )
                     ++hsIdx;
                 if( hsIdx == hostCount ) {
                     hs = realloc(hs, ++hostCount * sizeof(HostStat));
@@ -276,36 +340,42 @@ static IfaceStat *loadStats(void)
     return res;
 }
 
-static const char *lookupDnsName(in_addr_t addr, const char *resultIfNotFound)
+static const char *lookupDnsName(struct InetAddress *addr,
+        const char *resultIfNotFound)
 {
     static struct {
-        in_addr_t addr;
+        struct InetAddress addr;
         char *name;
     } *map = NULL;
     static int mapCnt = 0;
     int i;
     struct hostent *he;
-    struct in_addr a;
 
     for(i = 0; i < mapCnt; ++i) {
-        if( map[i].addr == addr )
+        if( isAddrEq(&map[i].addr, addr) )
             return map[i].name == NULL ? resultIfNotFound : map[i].name;
     }
-    a.s_addr = addr;
-    he = gethostbyaddr(&a, sizeof(a), AF_INET);
+    if( addr->version == 4 ) {
+        he = gethostbyaddr(&addr->v4, sizeof(addr->v4), AF_INET);
+    }else{
+        he = gethostbyaddr(&addr->v6, sizeof(addr->v6), AF_INET6);
+    }
     map = realloc(map, (mapCnt + 1) * sizeof(*map));
-    map[mapCnt].addr = addr;
+    map[mapCnt].addr = *addr;
     map[mapCnt].name = he == NULL ? NULL : strdup(he->h_name);
     i = mapCnt++;
     return map[i].name == NULL ? resultIfNotFound : map[i].name;
 }
 
-static const char *addrToStr(in_addr_t addr)
+static const char *addrToStr(const struct InetAddress *addr)
 {
-    struct in_addr a;
+    static char addrstr[INET6_ADDRSTRLEN];
 
-    a.s_addr = addr;
-    return inet_ntoa(a);
+    if( addr->version == 4 )
+        inet_ntop(AF_INET, &addr->v4, addrstr, sizeof(addrstr));
+    else
+        inet_ntop(AF_INET6, &addr->v6, addrstr, sizeof(addrstr));
+    return addrstr;
 }
 
 static char *monthName(char *buf, int buflen, int month)
@@ -337,8 +407,8 @@ static void dumpIfaceStat(const IfaceStat *is)
             fflush(stdout);
             printf("<tr><td class='plusminus' onclick='showDet(this)'>+</td>"
                     "<td>%s</td><td>%s</td>",
-                    lookupDnsName(ms->hosts[hostNum].host, ""),
-                    addrToStr(ms->hosts[hostNum].host));
+                    lookupDnsName(&ms->hosts[hostNum].host, ""),
+                    addrToStr(&ms->hosts[hostNum].host));
             printf("<td>%.3f MiB</td></tr>\n",
                     ms->hosts[hostNum].nbytes / 1048576.0);
             fflush(stdout);
@@ -348,8 +418,8 @@ static void dumpIfaceStat(const IfaceStat *is)
                 int mday = didx % 31;
                 DailyStatByHost *dsbh = NULL;
                 for(int i = 0; i < ms->dailyStat[mday].hostCount; ++i) {
-                    if( ms->dailyStat[mday].hosts[i].host
-                            == ms->hosts[hostNum].host )
+                    if( isAddrEq(&ms->dailyStat[mday].hosts[i].host,
+                            &ms->hosts[hostNum].host) )
                     {
                         dsbh = ms->dailyStat[mday].hosts + i;
                         break;
@@ -383,7 +453,7 @@ static void dumpIfaceStat(const IfaceStat *is)
                     for(int rhost = 0; rhost < hostCount; ++rhost) {
                         printf("<tr><td></td><td>%s</td><td></td>"
                             "<td>%.3f MiB</td></tr>\n",
-                            addrToStr(hosts[rhost].remote),
+                            addrToStr(&hosts[rhost].remote),
                                 hosts[rhost].nbytes / 1048576.0);
                     }
                     printf("</tbody></table></td></tr>\n");
@@ -413,7 +483,7 @@ static void dumpIfaceStat(const IfaceStat *is)
                 printf("<tr><td class='plusminus' "
                         "onclick='showDet(this)'>+</td>"
                         "<td>%s</td><td>%s</td>",
-                        lookupDnsName(dsbh->host, ""), addrToStr(dsbh->host));
+                        lookupDnsName(&dsbh->host, ""), addrToStr(&dsbh->host));
                 printf("<td>%.3f MiB</td></tr>\n", dsbh->nbytes / 1048576.0);
                 printf("<tr style='display: none'><td></td>"
                         "<td colspan='2'><table><tbody>\n");
@@ -433,7 +503,7 @@ static void dumpIfaceStat(const IfaceStat *is)
                     for(int rhost = 0; rhost < hostCount; ++rhost) {
                         printf("<tr><td></td><td>%s</td><td></td>"
                             "<td>%.3f MiB</td></tr>\n",
-                            addrToStr(hosts[rhost].remote),
+                            addrToStr(&hosts[rhost].remote),
                                 hosts[rhost].nbytes / 1048576.0);
                     }
                     printf("</tbody></table></td></tr>\n");
@@ -558,11 +628,16 @@ static void dumpStats(const IfaceStat *is)
 
 static void dumpLookup(const char *addr)
 {
-    struct in_addr a;
+    struct InetAddress inaddr;
     const char *name = "";
 
-    if( inet_aton(addr, &a) ) {
-        name = lookupDnsName(a.s_addr, "(unknown)");
+    if( strchr(addr, ':') != NULL ) {
+        inaddr.version = inet_pton(AF_INET6, addr, &inaddr.v6) == 1 ? 6 : 0;
+    }else{
+        inaddr.version = inet_pton(AF_INET, addr, &inaddr.v4) == 1 ? 4 : 0;
+    }
+    if( inaddr.version != 0 ) {
+        name = lookupDnsName(&inaddr, "(unknown)");
     }else{
         name = "(invalid address)";
     }
