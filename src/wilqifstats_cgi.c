@@ -395,12 +395,19 @@ static void dumpIfaceStat(const IfaceStat *is)
 {
     char addrbuf[40], monthbuf[20];
     int idx;
+    unsigned netLimit = wlqconf_getNetLimit();
 
     for(idx = 0; idx < is->statCount; ++idx) {
         MonthlyStat *ms = is->stats + idx;
-        printf("<h3>%s %04d&emsp; %.3f MiB</h3>\n",
+        printf("<h3>%s %04d&emsp; %.3f MiB",
                 monthName(monthbuf, sizeof(monthbuf), ms->month),
                 ms->year, ms->nbytes / 1048576.0);
+        if( netLimit != 0 ) {
+            printf("&emsp;(remain: %.3f GiB)",
+                    netLimit - ms->nbytes / 1073741824.0);
+
+        }
+        printf("</h3>\n");
         printf("<div><table><thead><tr><th colspan='4'>by host</th>"
                 "</tr></thead><tbody>\n");
         for(int hostNum = 0; hostNum < ms->hostCount; ++hostNum) {

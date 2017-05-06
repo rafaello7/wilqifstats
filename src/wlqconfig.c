@@ -14,6 +14,7 @@ static const char *const *gInterfaces = NULL;
 static const char *gSwitchUser = "www-data";
 static const char *gLocalNet = NULL;
 static const char *gStatsDir = "/var/lib/wilqifstats";
+unsigned gNetLimit = 0;
 
 static int parseParam(const char *name, const char *value)
 {
@@ -44,6 +45,8 @@ static int parseParam(const char *name, const char *value)
         gLocalNet = strdup(value);
     }else if( !strcmp(name, "statsdir") ) {
         gStatsDir = strdup(value);
+    }else if( !strcmp(name, "netlimit") ) {
+        gNetLimit = atoi(value);
     }else{
         res = 0;
     }
@@ -192,5 +195,10 @@ const char *wlqconf_getLocalNet(void)
 const char *wlqconf_getStatsDir(void)
 {
     return gStatsDir;
+}
+
+unsigned wlqconf_getNetLimit(void)
+{
+    return gNetLimit;
 }
 
