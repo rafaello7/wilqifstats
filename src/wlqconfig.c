@@ -16,6 +16,7 @@ static const char *gLocalNet = NULL;
 static const char *gStatsDir = "/var/lib/wilqifstats";
 int gFirstDay = 1;
 unsigned gNetLimit = 0;
+static const char *gWhoisCmd = "/usr/bin/whois";
 
 static int parseParam(const char *name, const char *value)
 {
@@ -50,6 +51,8 @@ static int parseParam(const char *name, const char *value)
         gFirstDay = atoi(value);
     }else if( !strcmp(name, "netlimit") ) {
         gNetLimit = atoi(value);
+    }else if( !strcmp(name, "whois") ) {
+        gWhoisCmd = strdup(value);
     }else{
         res = 0;
     }
@@ -208,5 +211,10 @@ int wlqconf_getFirstDay(void)
 unsigned wlqconf_getNetLimit(void)
 {
     return gNetLimit;
+}
+
+const char *wlqconf_getWhoisCmd(void)
+{
+    return gWhoisCmd;
 }
 

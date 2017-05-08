@@ -392,6 +392,19 @@ static char *monthName(char *buf, int buflen, int month)
     return buf;
 }
 
+static void dumpRemoteHosts(const HostStat *hosts, int hostCount)
+{
+    printf("<table><tbody>\n");
+    for(int rhost = 0; rhost < hostCount; ++rhost) {
+        const char *addrStr = addrToStr(&hosts[rhost].remote);
+        printf("<tr><td></td><td><a href='?whois=%s' title='look at whois'"
+                "target='_blank'>%s</a></td><td></td><td>%.3f MiB</td></tr>\n",
+                addrStr, addrStr,
+                hosts[rhost].nbytes / 1048576.0);
+    }
+    printf("</tnody></table>\n");
+}
+
 static void dumpIfaceStat(const IfaceStat *is)
 {
     char addrbuf[40], monthbuf1[20], monthbuf2[20];
@@ -478,18 +491,10 @@ static void dumpIfaceStat(const IfaceStat *is)
                         dsbh->hourlyStat[dhour].nbytes
                             / 1048576.0);
                     printf("<tr style='display: none'><td></td>"
-                            "<td colspan='2'><table><tbody>\n");
-                    const HostStat *hosts = 
-                        dsbh->hourlyStat[dhour].hosts;
-                    int hostCount =
-                        dsbh->hourlyStat[dhour].hostCount;
-                    for(int rhost = 0; rhost < hostCount; ++rhost) {
-                        printf("<tr><td></td><td>%s</td><td></td>"
-                            "<td>%.3f MiB</td></tr>\n",
-                            addrToStr(&hosts[rhost].remote),
-                                hosts[rhost].nbytes / 1048576.0);
-                    }
-                    printf("</tbody></table></td></tr>\n");
+                            "<td colspan='2'>\n");
+                    dumpRemoteHosts(dsbh->hourlyStat[dhour].hosts,
+                        dsbh->hourlyStat[dhour].hostCount);
+                    printf("</td></tr>\n");
                 }
                 printf("</tbody></table></td></tr>\n");
             }
@@ -527,19 +532,12 @@ static void dumpIfaceStat(const IfaceStat *is)
                         "<tr><td class='plusminus' "
                         "onclick='showDetLook(this)'>+</td><td>%02d</td>"
                         "<td>%.3f MiB</td></tr>\n",
-                        dhour,
-                        dsbh->hourlyStat[dhour].nbytes / 1048576.0);
+                        dhour, dsbh->hourlyStat[dhour].nbytes / 1048576.0);
                     printf("<tr style='display: none'><td></td>"
-                            "<td colspan='2'><table><tbody>\n");
-                    const HostStat *hosts = dsbh->hourlyStat[dhour].hosts;
-                    int hostCount = dsbh->hourlyStat[dhour].hostCount;
-                    for(int rhost = 0; rhost < hostCount; ++rhost) {
-                        printf("<tr><td></td><td>%s</td><td></td>"
-                            "<td>%.3f MiB</td></tr>\n",
-                            addrToStr(&hosts[rhost].remote),
-                                hosts[rhost].nbytes / 1048576.0);
-                    }
-                    printf("</tbody></table></td></tr>\n");
+                            "<td colspan='2'>\n");
+                    dumpRemoteHosts(dsbh->hourlyStat[dhour].hosts,
+                        dsbh->hourlyStat[dhour].hostCount);
+                    printf("</td></tr>\n");
                 }
                 printf("</tbody></table></td></tr>\n");
             }
@@ -679,6 +677,60 @@ static void dumpLookup(const char *addr)
         "%s\n", name);
 }
 
+static void dumpWhois(const char *addr)
+{
+    static const char *const keywords[] = {
+        "organization:", "netname:", "orgname:", "org-name:", "country:",
+        "address:", "descr:", "city:", NULL
+    };
+    FILE *fp;
+    const char *whois = wlqconf_getWhoisCmd();
+    char *cmd, line[4096];
+    int cur, linelen, len, isBold;
+
+    cmd = malloc(strlen(whois) + strlen(addr) + 16);
+    sprintf(cmd, "/usr/bin/whois '%s'", addr);
+    fp = popen(cmd, "r");
+    free(cmd);
+    printf("HTTP/1.1 Ok\n"
+        "Content-Type: text/html; charset=utf-8\n\n");
+    printf("<html><body><h3>Whois %s</h3><pre>\n", addr);
+    while( fgets(line, sizeof(line), fp) != NULL ) {
+        isBold = 0;
+        for(cur = 0; keywords[cur] != NULL && strncasecmp(line, keywords[cur],
+                    strlen(keywords[cur])); ++cur)
+            ;
+        isBold = keywords[cur] != NULL;
+        linelen = strlen(line);
+        cur = 0;
+        if( isBold )
+            printf("<b>");
+        while( cur < linelen ) {
+            len = strcspn(line + cur, "<&");
+            if( len ) {
+                fwrite(line + cur, len, 1, stdout);
+                cur += len;
+            }
+            if( cur == linelen )
+                break;
+            switch( line[cur] ) {
+            case '<':
+                printf("&lt;");
+                break;
+            case '&':
+                printf("&amp;");
+                break;
+            }
+            ++cur;
+        }
+        if( isBold )
+            printf("</b>");
+
+    }
+    printf("</pre></body></html>\n");
+    pclose(fp);
+}
+
 int main(int argc, char *argv[])
 {
     const char *queryStr = getenv("QUERY_STRING");
@@ -686,6 +738,8 @@ int main(int argc, char *argv[])
     wlqconf_read();
     if( queryStr != NULL && !strncmp(queryStr, "lookup=", 7) ) {
         dumpLookup(queryStr+7);
+    }else if( queryStr != NULL && !strncmp(queryStr, "whois=", 6) ) {
+        dumpWhois(queryStr+6);
     }else{
         IfaceStat *is = loadStats();
         dumpStats(is);

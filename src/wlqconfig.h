@@ -10,5 +10,6 @@ const char *wlqconf_getStatsDir(void);
 const char *wlqconf_getLocalNet(void);
 int wlqconf_getFirstDay(void);
 unsigned wlqconf_getNetLimit(void);
+const char *wlqconf_getWhoisCmd(void);
 
 #endif /* WLQCONFIG_H */
