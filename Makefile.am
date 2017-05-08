@@ -1,8 +1,5 @@
 SUBDIRS = src debian conf.d
 
-systemddir = /lib/systemd/system
-dist_systemd_DATA = wilqifstats.service
-
 deb: dist
 	rm -rf dpkg-deb
 	mkdir dpkg-deb
