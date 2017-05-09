@@ -11,5 +11,6 @@ const char *wlqconf_getLocalNet(void);
 int wlqconf_getFirstDay(void);
 unsigned wlqconf_getNetLimit(void);
 const char *wlqconf_getWhoisCmd(void);
+int wlqconf_isHrefRemote(void);
 
 #endif /* WLQCONFIG_H */

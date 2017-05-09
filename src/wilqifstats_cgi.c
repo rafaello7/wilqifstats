@@ -392,20 +392,29 @@ static char *monthName(char *buf, int buflen, int month)
     return buf;
 }
 
-static void dumpRemoteHosts(const HostStat *hosts, int hostCount)
+static void printRemoteHosts(const HostStat *hosts, int hostCount)
 {
+    int whoisLook = wlqconf_getWhoisCmd() != NULL;
+
     printf("<table><tbody>\n");
     for(int rhost = 0; rhost < hostCount; ++rhost) {
         const char *addrStr = addrToStr(&hosts[rhost].remote);
-        printf("<tr><td></td><td><a href='?whois=%s' title='look at whois'"
-                "target='_blank'>%s</a></td><td></td><td>%.3f MiB</td></tr>\n",
-                addrStr, addrStr,
+        printf("<tr><td></td><td>");
+        if( whoisLook )
+            printf("<a href='?whois=%s' title='look at whois' "
+                    "target='_blank'>%s</a>", addrStr, addrStr);
+        else
+            printf("%s", addrStr);
+        printf("</td><td>");
+        if( wlqconf_isHrefRemote() )
+            printf("<a href='http://%s' target='_blank'>...</a>", addrStr);
+        printf("</td><td>%.3f MiB</td></tr>\n",
                 hosts[rhost].nbytes / 1048576.0);
     }
     printf("</tnody></table>\n");
 }
 
-static void dumpIfaceStat(const IfaceStat *is)
+static void printIfaceStat(const IfaceStat *is)
 {
     char addrbuf[40], monthbuf1[20], monthbuf2[20];
     int idx;
@@ -492,7 +501,7 @@ static void dumpIfaceStat(const IfaceStat *is)
                             / 1048576.0);
                     printf("<tr style='display: none'><td></td>"
                             "<td colspan='2'>\n");
-                    dumpRemoteHosts(dsbh->hourlyStat[dhour].hosts,
+                    printRemoteHosts(dsbh->hourlyStat[dhour].hosts,
                         dsbh->hourlyStat[dhour].hostCount);
                     printf("</td></tr>\n");
                 }
@@ -535,7 +544,7 @@ static void dumpIfaceStat(const IfaceStat *is)
                         dhour, dsbh->hourlyStat[dhour].nbytes / 1048576.0);
                     printf("<tr style='display: none'><td></td>"
                             "<td colspan='2'>\n");
-                    dumpRemoteHosts(dsbh->hourlyStat[dhour].hosts,
+                    printRemoteHosts(dsbh->hourlyStat[dhour].hosts,
                         dsbh->hourlyStat[dhour].hostCount);
                     printf("</td></tr>\n");
                 }
@@ -548,7 +557,7 @@ static void dumpIfaceStat(const IfaceStat *is)
     }
 }
 
-static void dumpStats(const IfaceStat *is)
+static void printStats(const IfaceStat *is)
 {
     char hostname[HOST_NAME_MAX+1];
     const char *const *interfaces = wlqconf_getInterfaces();
@@ -575,7 +584,7 @@ static void dumpStats(const IfaceStat *is)
         "  while( tr !== null ) {\n"
         "    var td = tr.firstElementChild.nextElementSibling;\n"
         "    var xhr = new XMLHttpRequest();\n"
-        "    xhr.loadTarget = td.nextElementSibling;\n"
+        "    xhr.loadTarget = td.nextElementSibling%s;\n"
         "    xhr.onload = function() {\n"
         "      this.loadTarget.textContent = this.responseText;\n"
         "    }\n"
@@ -647,17 +656,19 @@ static void dumpStats(const IfaceStat *is)
         "</style>\n"
         "</head>\n"
         "<body>\n"
-        "<h1>%s network usage</h1>\n", hostname, hostname);
+        "<h1>%s network usage</h1>\n", hostname,
+        wlqconf_isHrefRemote() ? ".firstElementChild" : "",
+        hostname);
     while( is->ifaceName ) {
         if( interfaces == NULL || interfaces[1] )
             printf("<h2>interface: %s</h2>\n", is->ifaceName);
-        dumpIfaceStat(is);
+        printIfaceStat(is);
         ++is;
     }
     printf("<div style='margin-top: 4em'></div></body></html>\n");
 }
 
-static void dumpLookup(const char *addr)
+static void printLookup(const char *addr)
 {
     struct InetAddress inaddr;
     const char *name = "";
@@ -677,58 +688,66 @@ static void dumpLookup(const char *addr)
         "%s\n", name);
 }
 
-static void dumpWhois(const char *addr)
+static void printWhois(const char *addr)
 {
     static const char *const keywords[] = {
-        "organization:", "netname:", "orgname:", "org-name:", "country:",
-        "address:", "descr:", "city:", NULL
+        "organization", "netname", "orgname", "org-name", "country",
+        "address", "descr", "city", NULL
     };
     FILE *fp;
     const char *whois = wlqconf_getWhoisCmd();
     char *cmd, line[4096];
     int cur, linelen, len, isBold;
 
-    cmd = malloc(strlen(whois) + strlen(addr) + 16);
-    sprintf(cmd, "/usr/bin/whois '%s'", addr);
-    fp = popen(cmd, "r");
-    free(cmd);
     printf("HTTP/1.1 Ok\n"
         "Content-Type: text/html; charset=utf-8\n\n");
     printf("<html><body><h3>Whois %s</h3><pre>\n", addr);
-    while( fgets(line, sizeof(line), fp) != NULL ) {
-        isBold = 0;
-        for(cur = 0; keywords[cur] != NULL && strncasecmp(line, keywords[cur],
-                    strlen(keywords[cur])); ++cur)
-            ;
-        isBold = keywords[cur] != NULL;
-        linelen = strlen(line);
-        cur = 0;
-        if( isBold )
-            printf("<b>");
-        while( cur < linelen ) {
-            len = strcspn(line + cur, "<&");
-            if( len ) {
-                fwrite(line + cur, len, 1, stdout);
-                cur += len;
-            }
-            if( cur == linelen )
-                break;
-            switch( line[cur] ) {
-            case '<':
-                printf("&lt;");
-                break;
-            case '&':
-                printf("&amp;");
-                break;
-            }
-            ++cur;
-        }
-        if( isBold )
-            printf("</b>");
+    if( whois ) {
+        cmd = malloc(strlen(whois) + strlen(addr) + 16);
+        sprintf(cmd, "%s '%s'", whois, addr);
+        if( (fp = popen(cmd, "r")) != NULL ) {
+            while( fgets(line, sizeof(line), fp) != NULL ) {
+                isBold = 0;
+                for(cur = 0; keywords[cur] != NULL && ! isBold; ++cur) {
+                    int keywordLen = strlen(keywords[cur]);
+                    isBold = !strncasecmp(line, keywords[cur], keywordLen)
+                        && line[keywordLen] == ':';
+                }
+                linelen = strlen(line);
+                cur = 0;
+                if( isBold )
+                    printf("<b>");
+                while( cur < linelen ) {
+                    len = strcspn(line + cur, "<&");
+                    if( len ) {
+                        fwrite(line + cur, len, 1, stdout);
+                        cur += len;
+                    }
+                    if( cur == linelen )
+                        break;
+                    switch( line[cur] ) {
+                    case '<':
+                        printf("&lt;");
+                        break;
+                    case '&':
+                        printf("&amp;");
+                        break;
+                    }
+                    ++cur;
+                }
+                if( isBold )
+                    printf("</b>");
 
+            }
+            pclose(fp);
+        }else{
+            printf("popen: %s\n", strerror(errno));
+        }
+        free(cmd);
+    }else{
+        printf("Not available\n");
     }
     printf("</pre></body></html>\n");
-    pclose(fp);
 }
 
 int main(int argc, char *argv[])
@@ -737,12 +756,12 @@ int main(int argc, char *argv[])
 
     wlqconf_read();
     if( queryStr != NULL && !strncmp(queryStr, "lookup=", 7) ) {
-        dumpLookup(queryStr+7);
+        printLookup(queryStr+7);
     }else if( queryStr != NULL && !strncmp(queryStr, "whois=", 6) ) {
-        dumpWhois(queryStr+6);
+        printWhois(queryStr+6);
     }else{
         IfaceStat *is = loadStats();
-        dumpStats(is);
+        printStats(is);
     }
     return 0;
 }

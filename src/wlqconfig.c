@@ -16,7 +16,8 @@ static const char *gLocalNet = NULL;
 static const char *gStatsDir = "/var/lib/wilqifstats";
 int gFirstDay = 1;
 unsigned gNetLimit = 0;
-static const char *gWhoisCmd = "/usr/bin/whois";
+static const char *gWhoisCmd = NULL;
+static int gHrefRemote = 0;
 
 static int parseParam(const char *name, const char *value)
 {
@@ -53,6 +54,8 @@ static int parseParam(const char *name, const char *value)
         gNetLimit = atoi(value);
     }else if( !strcmp(name, "whois") ) {
         gWhoisCmd = strdup(value);
+    }else if( !strcmp(name, "hrefremote") ) {
+        gHrefRemote = value[0] == 'Y' || value[0] == 'y';
     }else{
         res = 0;
     }
@@ -215,6 +218,15 @@ unsigned wlqconf_getNetLimit(void)
 
 const char *wlqconf_getWhoisCmd(void)
 {
-    return gWhoisCmd;
+    static const char whoisExe[] = "/usr/bin/whois";
+
+    if( gWhoisCmd == NULL )
+        gWhoisCmd = access(whoisExe, X_OK) == 0 ? whoisExe : "";
+    return gWhoisCmd[0] ? gWhoisCmd : NULL;
+}
+
+int wlqconf_isHrefRemote(void)
+{
+    return gHrefRemote;
 }
 
